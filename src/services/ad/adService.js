@@ -161,19 +161,19 @@ function escapeFilter(value = '') {
 }
 
 
-async function setUserEnabled(userDn, enabled) {
+async function setAccountEnabled(objectDn, enabled) {
   return withServiceBind(async (client) => {
-    const { searchEntries } = await client.search(userDn, {
+    const { searchEntries } = await client.search(objectDn, {
       scope: 'base',
-      attributes: ['userAccountControl']
+      attributes: ['userAccountControl', 'objectClass']
     });
-    if (!searchEntries.length) throw new AppError('Nie znaleziono użytkownika', 404);
+    if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
 
     const current = Number(searchEntries[0].userAccountControl || 512);
     const DISABLED_FLAG = 2;
     const next = enabled ? (current & ~DISABLED_FLAG) : (current | DISABLED_FLAG);
 
-    await client.modify(userDn, [{ operation: 'replace', modification: { userAccountControl: String(next) } }]);
+    await client.modify(objectDn, [{ operation: 'replace', modification: { userAccountControl: String(next) } }]);
     return { updated: true, enabled };
   });
 }
@@ -215,6 +215,6 @@ module.exports = {
   moveObject,
   createUser,
   createGroup,
-  setUserEnabled,
+  setAccountEnabled,
   listOuChildren
 };

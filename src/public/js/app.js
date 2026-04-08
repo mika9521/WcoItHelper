@@ -13,13 +13,17 @@ const groupSearchModal = new bootstrap.Modal(document.getElementById('groupSearc
 const referenceUserModal = new bootstrap.Modal(document.getElementById('referenceUserModal'));
 const copyGroupsModal = new bootstrap.Modal(document.getElementById('copyGroupsModal'));
 const ouPickerModal = new bootstrap.Modal(document.getElementById('ouPickerModal'));
+const applyObjectChangesBtn = document.getElementById('applyObjectChangesBtn');
 
 const state = {
   currentUserDn: null,
   referenceUserDn: null,
   copyGroups: [],
   selectedOuInputId: null,
-  selectedOuDn: null
+  selectedOuDn: null,
+  currentObjectDn: null,
+  pendingChanges: null,
+  ouTreeCache: new Map()
 };
 
 function showToast(message, isError = false) {
@@ -80,15 +84,18 @@ function renderResultItem(item) {
   const tr = document.createElement('tr');
   const type = detectType(item);
   const dn = item.dn || item.distinguishedName;
+  const name = type === 'group'
+    ? (item.cn || item.displayName || item.sAMAccountName || '-')
+    : (item.displayName || item.cn || item.sAMAccountName || '-');
   tr.innerHTML = `
     <td>${getTypeIcon(type)}</td>
-    <td><button type="button" class="btn btn-link p-0 object-link">${item.displayName || item.cn || item.sAMAccountName || '-'}</button><div class="small text-muted">${getTypeLabel(type)}</div></td>
+    <td><button type="button" class="btn btn-link p-0 object-link">${name}</button><div class="small text-muted">${getTypeLabel(type)}</div></td>
     <td class="small">${dn || '-'}</td>
     <td>
       <div class="d-flex gap-1 justify-content-end">
         <button class="btn btn-sm btn-outline-primary action-open" title="Szczegóły">🔎</button>
         <button class="btn btn-sm btn-outline-warning action-move" title="Przenieś">📦</button>
-        ${type === 'user' ? '<button class="btn btn-sm btn-outline-danger action-toggle" title="Włącz/Wyłącz">🔒</button>' : ''}
+        ${(type === 'user' || type === 'computer') ? '<button class="btn btn-sm btn-outline-danger action-toggle" title="Włącz/Wyłącz">🔒</button>' : ''}
       </div>
     </td>
   `;
@@ -130,21 +137,19 @@ function dataTableTemplate(data) {
     ['lastLogon', formatAdDate(data.lastLogonTimestamp || data.lastLogon)],
     ['whenCreated', formatAdDate(data.whenCreated)]
   ];
-  return `<table class="table table-sm table-striped"><tbody>${rows.map(([k, v]) => `<tr><th>${k}</th><td><div class="input-group input-group-sm"><span class="input-group-text">${k}</span><input class="form-control" readonly value="${escapeHtml(v || '-')}" /></div></td></tr>`).join('')}</tbody></table>`;
+  return `<div class="d-grid gap-2">${rows.map(([k, v]) => `<div class="input-group input-group-sm"><span class="input-group-text">${k}</span><input class="form-control" readonly value="${escapeHtml(v || '-')}" /></div>`).join('')}</div>`;
 }
 
 function userTemplate(data) {
   return tabsTemplate([
     { id: 'u-data', title: 'Dane', content: dataTableTemplate(data) },
-    { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
-    { id: 'u-ou', title: 'OU / Przeniesienie', content: moveTemplate(data.distinguishedName || data.dn) }
+    { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
   ]);
 }
 
 function computerTemplate(data) {
   return tabsTemplate([
-    { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) },
-    { id: 'c-ou', title: 'OU / Przeniesienie', content: moveTemplate(data.distinguishedName || data.dn) }
+    { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) }
   ]);
 }
 
@@ -158,15 +163,20 @@ function groupTemplate(data) {
 
 function memberOfTemplate(data) {
   const groups = Array.isArray(data.memberOf) ? data.memberOf : [];
+  const userDn = data.distinguishedName || data.dn;
   return `
-    <div class="mb-2 d-flex flex-wrap gap-2">
-      ${groups.map((g) => `<span class="badge text-bg-info group-badge">${escapeHtml(g)}</span>`).join('') || '<span class="text-muted">Brak grup</span>'}
+    <div class="mb-2 group-member-list" id="memberOfList" data-userdn="${escapeHtml(userDn)}">
+      ${groups.map((g) => `<div class="member-of-line" data-groupdn="${escapeHtml(g)}"><span class="badge text-bg-info group-badge">${escapeHtml(g)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-group-btn ms-2" data-groupdn="${escapeHtml(g)}">✕</button></div>`).join('') || '<span class="text-muted">Brak grup</span>'}
     </div>
     <div class="d-flex gap-2">
-      <button class="btn btn-outline-primary btn-sm" id="openAddGroupModal" data-userdn="${data.distinguishedName || data.dn}">Dodaj</button>
-      <button class="btn btn-outline-secondary btn-sm" id="openReferenceModal" data-userdn="${data.distinguishedName || data.dn}">Inny użytkownik</button>
+      <button class="btn btn-outline-primary btn-sm" id="openAddGroupModal" data-userdn="${userDn}">Dodaj</button>
+      <button class="btn btn-outline-secondary btn-sm" id="openReferenceModal" data-userdn="${userDn}">Inny użytkownik</button>
     </div>
   `;
+}
+
+function renderPendingMemberLine(groupDn, pendingAdd = false) {
+  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-groupdn="${escapeHtml(groupDn)}"><span class="badge text-bg-info group-badge">${escapeHtml(groupDn)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-group-btn ms-2" data-groupdn="${escapeHtml(groupDn)}">✕</button></div>`;
 }
 
 function moveTemplate(objectDn) {
@@ -175,8 +185,9 @@ function moveTemplate(objectDn) {
     <div class="input-group">
       <input id="newOuDn" class="form-control" placeholder="Wybierz OU..." readonly />
       <button class="btn btn-outline-secondary pick-ou-btn" data-target-input="newOuDn">Wybierz OU</button>
-      <button id="moveObjectBtn" data-objdn="${objectDn}" class="btn btn-warning">Przenieś obiekt</button>
     </div>
+    <div class="form-text mt-2">Zmiana zostanie wykonana po kliknięciu „Zastosuj”.</div>
+    <input type="hidden" id="moveObjectDn" value="${escapeHtml(objectDn)}" />
   `;
 }
 
@@ -186,6 +197,9 @@ async function openObject(dn, typeHint) {
     const type = typeHint || detectType(data);
     objectTitle.textContent = `${data.displayName || data.cn || data.sAMAccountName} (${getTypeLabel(type)})`;
     objectBody.innerHTML = type === 'computer' ? computerTemplate(data) : type === 'group' ? groupTemplate(data) : userTemplate(data);
+    state.currentObjectDn = data.distinguishedName || data.dn || dn;
+    state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
+    applyObjectChangesBtn.classList.toggle('d-none', type === 'group');
     bindModalActions();
     objectModal.show();
   } catch (error) {
@@ -196,14 +210,17 @@ async function openObject(dn, typeHint) {
 function openMoveOnly(dn, label) {
   objectTitle.textContent = `Przeniesienie: ${label}`;
   objectBody.innerHTML = moveTemplate(dn);
+  state.currentObjectDn = dn;
+  state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
+  applyObjectChangesBtn.classList.remove('d-none');
   bindModalActions();
   objectModal.show();
 }
 
 async function toggleUser(userDn) {
   try {
-    await api('/api/user/enabled', { method: 'POST', body: JSON.stringify({ userDn, enabled: false }) });
-    showToast('Użytkownik został wyłączony/zablokowany');
+    await api('/api/object/enabled', { method: 'POST', body: JSON.stringify({ objectDn: userDn, enabled: false }) });
+    showToast('Obiekt został wyłączony/zablokowany');
   } catch (error) {
     showToast(error.message, true);
   }
@@ -220,17 +237,6 @@ function renderLookupItem(container, item, onPick) {
 }
 
 function bindModalActions() {
-  document.getElementById('moveObjectBtn')?.addEventListener('click', async () => {
-    try {
-      const objectDn = document.getElementById('moveObjectBtn').dataset.objdn;
-      const newParentOuDn = document.getElementById('newOuDn').value;
-      await api('/api/object/move', { method: 'POST', body: JSON.stringify({ objectDn, newParentOuDn }) });
-      showToast('Przeniesiono obiekt');
-    } catch (error) {
-      showToast(error.message, true);
-    }
-  });
-
   document.getElementById('openAddGroupModal')?.addEventListener('click', () => {
     state.currentUserDn = document.getElementById('openAddGroupModal').dataset.userdn;
     document.getElementById('groupLookupInput').value = '';
@@ -245,6 +251,21 @@ function bindModalActions() {
     referenceUserModal.show();
   });
 
+  document.querySelectorAll('.remove-group-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      const groupDn = btn.dataset.groupdn;
+      state.pendingChanges.removeGroups.add(groupDn);
+      state.pendingChanges.addGroups.delete(groupDn);
+      btn.closest('.member-of-line')?.classList.add('pending-removal');
+    });
+  });
+
+  document.getElementById('newOuDn')?.addEventListener('change', (event) => {
+    state.pendingChanges.moveTargetDn = event.target.value || null;
+  });
+
   bindOuPickers();
 }
 
@@ -253,43 +274,88 @@ function bindOuPickers() {
     btn.onclick = async () => {
       state.selectedOuInputId = btn.dataset.targetInput;
       state.selectedOuDn = null;
-      await loadOuLevel();
+      await renderOuTree();
       ouPickerModal.show();
     };
   });
 }
 
-async function loadOuLevel(parentDn = '') {
-  const tree = document.getElementById('ouTree');
+async function fetchOuChildren(parentDn = '') {
+  const cacheKey = parentDn || 'root';
+  if (state.ouTreeCache.has(cacheKey)) return state.ouTreeCache.get(cacheKey);
   const data = await api(`/api/ou-children${parentDn ? `?parentDn=${encodeURIComponent(parentDn)}` : ''}`);
-  tree.innerHTML = data.map((item) => {
-    const type = detectType(item);
-    const dn = item.dn || item.distinguishedName;
-    return `<button class="list-group-item list-group-item-action ou-node" data-dn="${escapeHtml(dn)}">${getTypeIcon(type)} ${escapeHtml(item.displayName || item.cn || dn)}<div class="small text-muted">${escapeHtml(dn)}</div></button>`;
-  }).join('');
+  state.ouTreeCache.set(cacheKey, data);
+  return data;
+}
 
-  tree.querySelectorAll('.ou-node').forEach((el) => {
-    el.addEventListener('click', async () => {
-      const dn = el.dataset.dn;
-      state.selectedOuDn = dn;
-      if (detectDnTypeByText(el.textContent) === 'ou') {
-        await loadOuLevel(dn);
-      }
-    });
+async function renderOuTree() {
+  const tree = document.getElementById('ouTree');
+  const rootItems = await fetchOuChildren();
+  tree.innerHTML = '<div class="small text-muted mb-2">Kliknij ▶ aby rozwinąć OU. Kliknij nazwę, aby wybrać.</div>';
+
+  const rootList = document.createElement('ul');
+  rootList.className = 'ou-tree-list';
+  tree.appendChild(rootList);
+
+  rootItems.forEach((item) => {
+    rootList.appendChild(createOuTreeNode(item));
   });
 }
 
-function detectDnTypeByText(text) {
-  if (text.includes('📁')) return 'ou';
-  if (text.includes('👤')) return 'user';
-  if (text.includes('🖥️')) return 'computer';
-  if (text.includes('🛡️')) return 'group';
-  return 'other';
+function createOuTreeNode(item) {
+  const type = detectType(item);
+  const dn = item.dn || item.distinguishedName;
+  const li = document.createElement('li');
+  li.className = 'ou-tree-item';
+  li.dataset.dn = dn;
+
+  const header = document.createElement('div');
+  header.className = 'ou-tree-node';
+  header.innerHTML = `
+    <button type="button" class="btn btn-sm btn-link p-0 me-1 ou-expand-btn ${type === 'ou' ? '' : 'invisible'}">▶</button>
+    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeIcon(type)} ${escapeHtml(item.displayName || item.cn || dn)}</button>
+    <div class="small text-muted ps-4">${escapeHtml(dn)}</div>
+  `;
+  li.appendChild(header);
+
+  const childrenWrap = document.createElement('ul');
+  childrenWrap.className = 'ou-tree-list d-none';
+  li.appendChild(childrenWrap);
+
+  header.querySelector('.ou-select-btn').addEventListener('click', () => {
+    document.querySelectorAll('.ou-select-btn.selected').forEach((x) => x.classList.remove('selected'));
+    header.querySelector('.ou-select-btn').classList.add('selected');
+    state.selectedOuDn = dn;
+  });
+
+  header.querySelector('.ou-expand-btn').addEventListener('click', async (event) => {
+    event.preventDefault();
+    if (type !== 'ou') return;
+    const expandBtn = event.currentTarget;
+    const expanded = !childrenWrap.classList.contains('d-none');
+    if (expanded) {
+      childrenWrap.classList.add('d-none');
+      expandBtn.textContent = '▶';
+      return;
+    }
+    if (!childrenWrap.dataset.loaded) {
+      const children = await fetchOuChildren(dn);
+      children.forEach((child) => {
+        childrenWrap.appendChild(createOuTreeNode(child));
+      });
+      childrenWrap.dataset.loaded = '1';
+    }
+    childrenWrap.classList.remove('d-none');
+    expandBtn.textContent = '▼';
+  });
+
+  return li;
 }
 
 document.getElementById('confirmOuBtn').addEventListener('click', () => {
   if (!state.selectedOuDn || !state.selectedOuInputId) return;
   document.getElementById(state.selectedOuInputId).value = state.selectedOuDn;
+  state.pendingChanges.moveTargetDn = state.selectedOuDn;
   ouPickerModal.hide();
 });
 
@@ -303,9 +369,26 @@ document.getElementById('groupLookupInput').addEventListener('input', async (eve
   const rows = await api(`/api/search?q=${encodeURIComponent(q)}&type=group`);
   box.innerHTML = '';
   rows.forEach((row) => renderLookupItem(box, row, async (item) => {
-    await api('/api/user/groups', { method: 'POST', body: JSON.stringify({ userDn: state.currentUserDn, addDns: [item.dn || item.distinguishedName] }) });
+    const pickedDn = item.dn || item.distinguishedName;
+    state.pendingChanges.addGroups.add(pickedDn);
+    state.pendingChanges.removeGroups.delete(pickedDn);
+    const list = document.getElementById('memberOfList');
+    if (list && !list.querySelector(`[data-groupdn="${cssEscapeValue(pickedDn)}"]`)) {
+      list.querySelector('.text-muted')?.remove();
+      list.insertAdjacentHTML('beforeend', renderPendingMemberLine(pickedDn, true));
+      list.querySelectorAll('.remove-group-btn').forEach((btn) => {
+        if (btn.dataset.bound) return;
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', () => {
+          const groupDn = btn.dataset.groupdn;
+          state.pendingChanges.removeGroups.add(groupDn);
+          state.pendingChanges.addGroups.delete(groupDn);
+          btn.closest('.member-of-line')?.classList.add('pending-removal');
+        });
+      });
+    }
     groupSearchModal.hide();
-    showToast('Dodano grupę');
+    showToast('Dodano do zmian oczekujących');
   }));
 });
 
@@ -338,21 +421,72 @@ document.getElementById('clearAllCopyGroups').addEventListener('click', () => {
 
 document.getElementById('applyCopyGroupsBtn').addEventListener('click', async () => {
   const selectedGroups = Array.from(document.querySelectorAll('.copy-group-check:checked')).map((x) => x.value);
-  await api('/api/user/groups/copy', {
-    method: 'POST',
-    body: JSON.stringify({ targetUserDn: state.currentUserDn, referenceUserDn: state.referenceUserDn, selectedGroups })
+  selectedGroups.forEach((groupDn) => {
+    state.pendingChanges.addGroups.add(groupDn);
+    state.pendingChanges.removeGroups.delete(groupDn);
   });
+  const list = document.getElementById('memberOfList');
+  if (list) {
+    list.querySelector('.text-muted')?.remove();
+    selectedGroups.forEach((groupDn) => {
+      if (!list.querySelector(`[data-groupdn="${cssEscapeValue(groupDn)}"]`)) {
+        list.insertAdjacentHTML('beforeend', renderPendingMemberLine(groupDn, true));
+      }
+    });
+    bindModalActions();
+  }
   copyGroupsModal.hide();
-  showToast('Skopiowano grupy');
+  showToast('Grupy dodane do zmian oczekujących');
 });
 
 searchBtn.addEventListener('click', runSearch);
+searchInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    runSearch();
+  }
+});
 loadReportBtn.addEventListener('click', async () => {
   try {
     const years = Number(document.getElementById('reportYears').value || 2);
     const data = await api(`/api/reports/stale-logons?years=${years}`);
     reportResult.innerHTML = `<div class="mb-2">Wynik: <strong>${data.length}</strong> kont</div><pre class="json-view">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
     showToast('Raport wygenerowany');
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+applyObjectChangesBtn.addEventListener('click', async () => {
+  try {
+    const operations = [];
+    const addDns = Array.from(state.pendingChanges?.addGroups || []);
+    const removeDns = Array.from(state.pendingChanges?.removeGroups || []);
+    const moveTargetDn = state.pendingChanges?.moveTargetDn;
+
+    if (addDns.length || removeDns.length) {
+      operations.push(api('/api/user/groups', {
+        method: 'POST',
+        body: JSON.stringify({ userDn: state.currentObjectDn, addDns, removeDns })
+      }));
+    }
+
+    if (moveTargetDn) {
+      operations.push(api('/api/object/move', {
+        method: 'POST',
+        body: JSON.stringify({ objectDn: state.currentObjectDn, newParentOuDn: moveTargetDn })
+      }));
+    }
+
+    if (!operations.length) {
+      showToast('Brak zmian do zastosowania');
+      return;
+    }
+
+    await Promise.all(operations);
+    objectModal.hide();
+    showToast('Zmiany zostały zastosowane');
+    await runSearch();
   } catch (error) {
     showToast(error.message, true);
   }
@@ -389,6 +523,11 @@ function escapeHtml(text) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+}
+
+function cssEscapeValue(value) {
+  if (window.CSS?.escape) return window.CSS.escape(value);
+  return String(value).replaceAll('"', '\\"');
 }
 
 bindOuPickers();
