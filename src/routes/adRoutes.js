@@ -7,7 +7,7 @@ const {
   moveObject,
   createUser,
   createGroup,
-  setUserEnabled,
+  setAccountEnabled,
   listOuChildren
 } = require('../services/ad/adService');
 const { staleLogons } = require('../services/reports/reportService');
@@ -64,10 +64,10 @@ router.post('/api/object/move', async (req, res) => {
 });
 
 
-router.post('/api/user/enabled', async (req, res) => {
+router.post('/api/object/enabled', async (req, res) => {
   try {
-    const { userDn, enabled } = req.body;
-    const result = await setUserEnabled(userDn, Boolean(enabled));
+    const { objectDn, enabled } = req.body;
+    const result = await setAccountEnabled(objectDn, Boolean(enabled));
     res.json(result);
   } catch (error) {
     res.status(error.status || 500).json({ message: error.message });
