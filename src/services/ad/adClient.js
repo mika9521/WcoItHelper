@@ -21,17 +21,24 @@ function formatError(error) {
 function createClient() {
   debugLog('Tworzenie klienta LDAP', {
     url: env.ad.url,
+    protocol: env.ad.protocol,
+    tlsEnabled: env.ad.tlsEnabled,
     rejectUnauthorized: env.ad.rejectUnauthorized
   });
 
-  const client = new Client({
+  const clientConfig = {
     url: env.ad.url,
     timeout: 8000,
-    connectTimeout: 8000,
-    tlsOptions: {
+    connectTimeout: 8000
+  };
+
+  if (env.ad.tlsEnabled) {
+    clientConfig.tlsOptions = {
       rejectUnauthorized: env.ad.rejectUnauthorized
-    }
-  });
+    };
+  }
+
+  const client = new Client(clientConfig);
 
   client.on('connectError', (error) => {
     debugLog('Błąd połączenia LDAP (connectError)', formatError(error));
@@ -43,9 +50,19 @@ function createClient() {
   return client;
 }
 
+async function ensureTlsIfNeeded(client) {
+  const usesLdap = String(env.ad.url || '').toLowerCase().startsWith('ldap://');
+  if (!env.ad.tlsEnabled || !usesLdap) return;
+
+  debugLog('Uruchamianie StartTLS dla połączenia LDAP');
+  await client.startTLS({ rejectUnauthorized: env.ad.rejectUnauthorized });
+  debugLog('StartTLS aktywowany');
+}
+
 async function withServiceBind(action) {
   const client = createClient();
   try {
+    await ensureTlsIfNeeded(client);
     debugLog('Próba bind serwisowego', { bindDn: env.ad.bindDn });
     await client.bind(env.ad.bindDn, env.ad.bindPassword);
     debugLog('Bind serwisowy OK');
@@ -66,6 +83,7 @@ async function withServiceBind(action) {
 async function withUserBind(userPrincipalName, password, action) {
   const client = createClient();
   try {
+    await ensureTlsIfNeeded(client);
     debugLog('Próba bind użytkownika', { userPrincipalName });
     await client.bind(userPrincipalName, password);
     debugLog('Bind użytkownika OK', { userPrincipalName });

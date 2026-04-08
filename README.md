@@ -43,3 +43,20 @@ npm run dev
 - Do ustawiania haseł i modyfikacji kont używaj `LDAPS`.
 - Konto serwisowe powinno mieć tylko minimalne wymagane uprawnienia.
 - W produkcji ustaw `AD_TLS_REJECT_UNAUTHORIZED=true` i poprawny certyfikat CA.
+
+## LDAP / LDAPS i TLS
+
+Możesz teraz skonfigurować połączenie na dwa sposoby:
+
+1. **Pełny URL** przez `AD_URL` (np. `ldap://dc01.hospital.local:389` albo `ldaps://dc01.hospital.local:636`).
+2. **Składany URL** przez:
+   - `AD_PROTOCOL=ldap` lub `AD_PROTOCOL=ldaps`,
+   - `AD_HOST`,
+   - `AD_PORT`.
+
+Dodatkowo:
+
+- `AD_TLS_ENABLED=true|false` – włącza/wyłącza TLS.
+  - Dla `ldap://` działa jako **StartTLS**.
+  - Dla `ldaps://` szyfrowanie jest zapewniane przez sam protokół.
+- `AD_TLS_REJECT_UNAUTHORIZED=true|false` – walidacja certyfikatu TLS.
