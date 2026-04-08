@@ -1,0 +1,23 @@
+<div class="modal fade" id="newUserModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form id="newUserForm" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Kreator nowego użytkownika</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2">
+          <div class="col-6"><input class="form-control" name="firstName" placeholder="Imię" required /></div>
+          <div class="col-6"><input class="form-control" name="lastName" placeholder="Nazwisko" required /></div>
+        </div>
+        <input class="form-control mt-2" name="login" placeholder="Login" required />
+        <input class="form-control mt-2" name="password" type="password" placeholder="Hasło" required />
+        <input class="form-control mt-2" name="ouDn" placeholder="OU DN (np. OU=Pracownicy,DC=hospital,DC=local)" required />
+        <textarea class="form-control mt-2" name="description" placeholder="Opis"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary">Utwórz</button>
+      </div>
+    </form>
+  </div>
+</div>
