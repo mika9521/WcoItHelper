@@ -1,0 +1,54 @@
+<div class="modal fade" id="groupSearchModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Dodaj grupę</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group mb-3">
+          <input id="groupLookupInput" class="form-control" placeholder="Szukaj grupy..." />
+        </div>
+        <div id="groupLookupResults" class="list-group"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="referenceUserModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Wybierz innego użytkownika</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group mb-3">
+          <input id="referenceLookupInput" class="form-control" placeholder="Szukaj użytkownika..." />
+        </div>
+        <div id="referenceLookupResults" class="list-group"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="copyGroupsModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Skopiuj grupy</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2 d-flex gap-2">
+          <button class="btn btn-sm btn-outline-primary" id="selectAllCopyGroups">Zaznacz wszystkie</button>
+          <button class="btn btn-sm btn-outline-secondary" id="clearAllCopyGroups">Odznacz wszystkie</button>
+        </div>
+        <div id="copyGroupsList"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="applyCopyGroupsBtn">Zastosuj</button>
+      </div>
+    </div>
+  </div>
+</div>

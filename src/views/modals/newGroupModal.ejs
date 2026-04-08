@@ -1,0 +1,23 @@
+<div class="modal fade" id="newGroupModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form id="newGroupForm" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Kreator nowej grupy</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input class="form-control" name="name" placeholder="Nazwa grupy (CN)" required />
+        <input class="form-control mt-2" name="samAccountName" placeholder="sAMAccountName" required />
+        <label class="form-label mt-2">OU docelowe</label>
+        <div class="input-group">
+          <input class="form-control" name="ouDn" id="newGroupOuDn" placeholder="Wybierz OU..." readonly required />
+          <button type="button" class="btn btn-outline-secondary pick-ou-btn" data-target-input="newGroupOuDn">Wybierz OU</button>
+        </div>
+        <textarea class="form-control mt-2" name="description" placeholder="Opis"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary">Utwórz grupę</button>
+      </div>
+    </form>
+  </div>
+</div>

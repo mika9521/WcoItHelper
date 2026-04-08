@@ -6,3 +6,13 @@ pre.json-view {
   padding: 12px;
   max-height: 400px;
 }
+
+#resultsTable tbody tr td { vertical-align: middle; }
+.group-badge {
+  font-size: 0.8rem;
+  white-space: normal;
+}
+.ou-tree {
+  display: grid;
+  gap: 8px;
+}

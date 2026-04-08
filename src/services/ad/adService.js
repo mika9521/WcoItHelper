@@ -5,7 +5,7 @@ const { normalizeObject } = require('./adMapper');
 
 const DEFAULT_ATTRS = [
   'cn', 'displayName', 'sAMAccountName', 'userPrincipalName', 'mail', 'department', 'title',
-  'whenCreated', 'lastLogonTimestamp', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory'
+  'whenCreated', 'lastLogonTimestamp', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName'
 ];
 
 function buildUpn(login) {
@@ -160,6 +160,52 @@ function escapeFilter(value = '') {
     .replace(/\0/g, '\\00');
 }
 
+
+async function setUserEnabled(userDn, enabled) {
+  return withServiceBind(async (client) => {
+    const { searchEntries } = await client.search(userDn, {
+      scope: 'base',
+      attributes: ['userAccountControl']
+    });
+    if (!searchEntries.length) throw new AppError('Nie znaleziono użytkownika', 404);
+
+    const current = Number(searchEntries[0].userAccountControl || 512);
+    const DISABLED_FLAG = 2;
+    const next = enabled ? (current & ~DISABLED_FLAG) : (current | DISABLED_FLAG);
+
+    await client.modify(userDn, [{ operation: 'replace', modification: { userAccountControl: String(next) } }]);
+    return { updated: true, enabled };
+  });
+}
+
+async function listOuChildren(parentDn = env.ad.baseDn) {
+  return withServiceBind(async (client) => {
+    const { searchEntries } = await client.search(parentDn, {
+      scope: 'one',
+      filter: '(|(objectClass=organizationalUnit)(objectClass=container)(objectClass=user)(objectClass=group)(objectClass=computer))',
+      attributes: ['dn', 'cn', 'displayName', 'distinguishedName', 'objectClass']
+    });
+    return searchEntries.map((entry) => normalizeObject(entry));
+  });
+}
+
+async function createGroup(payload) {
+  const { ouDn, name, samAccountName, description } = payload;
+  const dn = `CN=${name},${ouDn}`;
+
+  return withServiceBind(async (client) => {
+    await client.add(dn, {
+      objectClass: ['top', 'group'],
+      cn: name,
+      sAMAccountName: samAccountName,
+      description,
+      groupType: '-2147483646'
+    });
+
+    return { dn, name, samAccountName };
+  });
+}
+
 module.exports = {
   authenticate,
   searchObjects,
@@ -167,5 +213,8 @@ module.exports = {
   updateUserGroups,
   copyGroupsFromReference,
   moveObject,
-  createUser
+  createUser,
+  createGroup,
+  setUserEnabled,
+  listOuChildren
 };
