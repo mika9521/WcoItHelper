@@ -12,7 +12,11 @@
         </div>
         <input class="form-control mt-2" name="login" placeholder="Login" required />
         <input class="form-control mt-2" name="password" type="password" placeholder="Hasło" required />
-        <input class="form-control mt-2" name="ouDn" placeholder="OU DN (np. OU=Pracownicy,DC=hospital,DC=local)" required />
+        <label class="form-label mt-2">OU docelowe</label>
+        <div class="input-group">
+          <input class="form-control" name="ouDn" id="newUserOuDn" placeholder="Wybierz OU..." readonly required />
+          <button type="button" class="btn btn-outline-secondary pick-ou-btn" data-target-input="newUserOuDn">Wybierz OU</button>
+        </div>
         <textarea class="form-control mt-2" name="description" placeholder="Opis"></textarea>
       </div>
       <div class="modal-footer">

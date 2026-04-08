@@ -12,6 +12,8 @@ function normalizeObject(entry) {
     title: entry.title,
     whenCreated: entry.whenCreated,
     lastLogonTimestamp: entry.lastLogonTimestamp,
+    sn: entry.sn,
+    givenName: entry.givenName,
     memberOf: Array.isArray(entry.memberOf) ? entry.memberOf : entry.memberOf ? [entry.memberOf] : [],
     distinguishedName: entry.distinguishedName,
     description: entry.description

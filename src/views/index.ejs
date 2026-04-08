@@ -10,6 +10,14 @@
 <body>
 <nav class="navbar navbar-expand-lg bg-dark navbar-dark px-3">
   <span class="navbar-brand">AD Portal</span>
+  <ul class="navbar-nav me-auto ms-3" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="search-tab" data-bs-toggle="tab" data-bs-target="#search-panel" type="button" role="tab">Wyszukiwarka</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="reports-tab" data-bs-toggle="tab" data-bs-target="#reports-panel" type="button" role="tab">Raporty</button>
+    </li>
+  </ul>
   <div class="ms-auto text-white small">
     Zalogowany: <strong><%= user.displayName %></strong>
     <form action="/logout" method="post" class="d-inline ms-2">
@@ -19,53 +27,80 @@
 </nav>
 
 <main class="container py-4">
-  <section class="card mb-4">
-    <div class="card-body">
-      <div class="row g-2">
-        <div class="col-md-3">
-          <select id="typeFilter" class="form-select">
-            <option value="all">Wszystkie</option>
-            <option value="user">Użytkownicy</option>
-            <option value="computer">Komputery</option>
-            <option value="group">Grupy zabezpieczeń</option>
-          </select>
+  <div class="tab-content">
+    <section class="tab-pane fade show active" id="search-panel" role="tabpanel" aria-labelledby="search-tab">
+      <section class="card mb-4">
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <select id="typeFilter" class="form-select">
+                <option value="all">Wszystkie</option>
+                <option value="user">Użytkownicy</option>
+                <option value="computer">Komputery</option>
+                <option value="group">Grupy zabezpieczeń</option>
+              </select>
+            </div>
+            <div class="col-md-7">
+              <input id="searchInput" class="form-control" placeholder="Szukaj: user, komputer, grupa..." />
+            </div>
+            <div class="col-md-2 d-grid">
+              <button id="searchBtn" class="btn btn-primary">Szukaj</button>
+            </div>
+          </div>
         </div>
-        <div class="col-md-7">
-          <input id="searchInput" class="form-control" placeholder="Szukaj: user, komputer, grupa..." />
-        </div>
-        <div class="col-md-2 d-grid">
-          <button id="searchBtn" class="btn btn-primary">Szukaj</button>
-        </div>
-      </div>
-    </div>
-  </section>
+      </section>
 
-  <section class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-      <span>Wyniki</span>
-      <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#newUserModal">+ Nowy użytkownik</button>
-    </div>
-    <div class="card-body">
-      <div id="results" class="list-group"></div>
-    </div>
-  </section>
+      <section class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span>Wyniki</span>
+          <div class="btn-group">
+            <button class="btn btn-success btn-sm dropdown-toggle" data-bs-toggle="dropdown">Dodaj</button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#newUserModal">Dodaj użytkownika</button></li>
+              <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#newGroupModal">Dodaj grupę</button></li>
+            </ul>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0" id="resultsTable">
+              <thead>
+              <tr>
+                <th style="width:40px;">Typ</th>
+                <th>Nazwa</th>
+                <th>DN</th>
+                <th style="width:120px;">Akcje</th>
+              </tr>
+              </thead>
+              <tbody id="results"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
 
-  <section class="card">
-    <div class="card-header">Raporty</div>
-    <div class="card-body">
-      <div class="input-group mb-3" style="max-width: 320px;">
-        <span class="input-group-text">Starsze niż</span>
-        <input id="reportYears" type="number" class="form-control" value="2" min="1" />
-        <span class="input-group-text">lata</span>
-        <button class="btn btn-outline-primary" id="loadReportBtn">Generuj</button>
-      </div>
-      <div id="reportResult" class="small"></div>
-    </div>
-  </section>
+    <section class="tab-pane fade" id="reports-panel" role="tabpanel" aria-labelledby="reports-tab">
+      <section class="card">
+        <div class="card-header">Raporty</div>
+        <div class="card-body">
+          <div class="input-group mb-3" style="max-width: 320px;">
+            <span class="input-group-text">Starsze niż</span>
+            <input id="reportYears" type="number" class="form-control" value="2" min="1" />
+            <span class="input-group-text">lata</span>
+            <button class="btn btn-outline-primary" id="loadReportBtn">Generuj</button>
+          </div>
+          <div id="reportResult" class="small"></div>
+        </div>
+      </section>
+    </section>
+  </div>
 </main>
 
 <%- include('modals/objectModal') %>
 <%- include('modals/newUserModal') %>
+<%- include('modals/newGroupModal') %>
+<%- include('modals/ouPickerModal') %>
+<%- include('modals/groupToolsModals') %>
 
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
   <div id="appToast" class="toast align-items-center text-bg-primary border-0" role="alert">
