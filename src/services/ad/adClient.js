@@ -33,12 +33,14 @@ function createClient() {
     }
   });
 
-  client.on('connectError', (error) => {
-    debugLog('Błąd połączenia LDAP (connectError)', formatError(error));
-  });
-  client.on('error', (error) => {
-    debugLog('Błąd klienta LDAP (error)', formatError(error));
-  });
+  if (env.debug && typeof client.on === 'function') {
+    client.on('connectError', (error) => {
+      debugLog('Błąd połączenia LDAP (connectError)', formatError(error));
+    });
+    client.on('error', (error) => {
+      debugLog('Błąd klienta LDAP (error)', formatError(error));
+    });
+  }
 
   return client;
 }
