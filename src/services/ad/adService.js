@@ -5,7 +5,7 @@ const { normalizeObject } = require('./adMapper');
 
 const DEFAULT_ATTRS = [
   'cn', 'displayName', 'sAMAccountName', 'userPrincipalName', 'mail', 'department', 'title',
-  'whenCreated', 'lastLogonTimestamp', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName'
+  'whenCreated', 'lastLogonTimestamp', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName', 'userAccountControl'
 ];
 
 function buildUpn(login) {
@@ -71,6 +71,27 @@ async function searchObjects(query, type) {
       attributes: DEFAULT_ATTRS
     });
 
+    return searchEntries.map(normalizeObject);
+  });
+}
+
+async function searchObjectsInOu(ouDn, type = 'all') {
+  const filters = {
+    user: '(objectClass=user)',
+    computer: '(objectClass=computer)',
+    group: '(objectClass=group)',
+    all: '(|(objectClass=user)(objectClass=computer)(objectClass=group))'
+  };
+  const typeFilter = filters[type] || filters.all;
+  const baseDn = ouDn || env.ad.baseDn;
+
+  return withServiceBind(async (client) => {
+    const { searchEntries } = await client.search(baseDn, {
+      scope: 'sub',
+      sizeLimit: 250,
+      filter: `(&${typeFilter})`,
+      attributes: DEFAULT_ATTRS
+    });
     return searchEntries.map(normalizeObject);
   });
 }
@@ -178,14 +199,41 @@ async function setAccountEnabled(objectDn, enabled) {
   });
 }
 
-async function listOuChildren(parentDn = env.ad.baseDn) {
+async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false) {
+  const filter = onlyOu
+    ? '(|(objectClass=organizationalUnit)(objectClass=container))'
+    : '(|(objectClass=organizationalUnit)(objectClass=container)(objectClass=user)(objectClass=group)(objectClass=computer))';
   return withServiceBind(async (client) => {
     const { searchEntries } = await client.search(parentDn, {
       scope: 'one',
-      filter: '(|(objectClass=organizationalUnit)(objectClass=container)(objectClass=user)(objectClass=group)(objectClass=computer))',
+      filter,
       attributes: ['dn', 'cn', 'displayName', 'distinguishedName', 'objectClass']
     });
     return searchEntries.map((entry) => normalizeObject(entry));
+  });
+}
+
+async function getDashboardStats() {
+  return withServiceBind(async (client) => {
+    const runCount = async (filter) => {
+      const { searchEntries } = await client.search(env.ad.baseDn, {
+        scope: 'sub',
+        filter,
+        attributes: ['dn'],
+        paged: true,
+        sizeLimit: 0
+      });
+      return searchEntries.length;
+    };
+
+    const [users, groups, computers, ous] = await Promise.all([
+      runCount('(objectClass=user)'),
+      runCount('(objectClass=group)'),
+      runCount('(objectClass=computer)'),
+      runCount('(objectClass=organizationalUnit)')
+    ]);
+
+    return { users, groups, computers, ous, total: users + groups + computers };
   });
 }
 
@@ -209,6 +257,7 @@ async function createGroup(payload) {
 module.exports = {
   authenticate,
   searchObjects,
+  searchObjectsInOu,
   getObjectDetails,
   updateUserGroups,
   copyGroupsFromReference,
@@ -216,5 +265,6 @@ module.exports = {
   createUser,
   createGroup,
   setAccountEnabled,
-  listOuChildren
+  listOuChildren,
+  getDashboardStats
 };

@@ -16,7 +16,8 @@ function normalizeObject(entry) {
     givenName: entry.givenName,
     memberOf: Array.isArray(entry.memberOf) ? entry.memberOf : entry.memberOf ? [entry.memberOf] : [],
     distinguishedName: entry.distinguishedName,
-    description: entry.description
+    description: entry.description,
+    userAccountControl: entry.userAccountControl
   };
 }
 

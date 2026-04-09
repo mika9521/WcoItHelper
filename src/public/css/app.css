@@ -8,6 +8,14 @@ pre.json-view {
 }
 
 #resultsTable tbody tr td { vertical-align: middle; }
+#resultsTable tbody tr.result-active td .object-link,
+#resultsTable tbody tr.result-active td .type-open-btn {
+  font-weight: 700;
+  text-decoration: underline;
+}
+.stat-card {
+  border-color: #e9ecef;
+}
 .group-badge {
   font-size: 0.8rem;
   white-space: normal;
@@ -28,7 +36,7 @@ pre.json-view {
   opacity: 0.7;
 }
 .member-of-line.pending-added .group-badge {
-  box-shadow: 0 0 0 1px rgba(13, 110, 253, 0.45) inset;
+  box-shadow: 0 0 0 1px rgba(255, 193, 7, 0.85) inset;
 }
 .ou-tree {
   font-size: 0.95rem;
@@ -42,8 +50,9 @@ pre.json-view {
   margin-bottom: 0.25rem;
 }
 .ou-tree-node .ou-select-btn.selected {
-  font-weight: 600;
+  font-weight: 700;
   text-decoration: underline;
+  color: #0d6efd;
 }
 .modal.fade .modal-dialog {
   transition: transform 0.2s ease-out, opacity 0.2s ease-out;

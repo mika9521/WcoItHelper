@@ -12,7 +12,10 @@
   <span class="navbar-brand">AD Portal</span>
   <ul class="navbar-nav me-auto ms-3" role="tablist">
     <li class="nav-item" role="presentation">
-      <button class="nav-link active" id="search-tab" data-bs-toggle="tab" data-bs-target="#search-panel" type="button" role="tab">Wyszukiwarka</button>
+      <button class="nav-link active" id="dashboard-tab" data-bs-toggle="tab" data-bs-target="#dashboard-panel" type="button" role="tab">Dashboard</button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="search-tab" data-bs-toggle="tab" data-bs-target="#search-panel" type="button" role="tab">Wyszukiwarka</button>
     </li>
     <li class="nav-item" role="presentation">
       <button class="nav-link" id="reports-tab" data-bs-toggle="tab" data-bs-target="#reports-panel" type="button" role="tab">Raporty</button>
@@ -28,7 +31,22 @@
 
 <main class="container py-4">
   <div class="tab-content">
-    <section class="tab-pane fade show active" id="search-panel" role="tabpanel" aria-labelledby="search-tab">
+    <section class="tab-pane fade show active" id="dashboard-panel" role="tabpanel" aria-labelledby="dashboard-tab">
+      <section class="card mb-4">
+        <div class="card-header">Statystyki Active Directory</div>
+        <div class="card-body">
+          <div class="row g-3" id="dashboardStats">
+            <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-muted small">Użytkownicy</div><div class="h4 mb-0" id="statUsers">-</div></div></div></div>
+            <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-muted small">Grupy</div><div class="h4 mb-0" id="statGroups">-</div></div></div></div>
+            <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-muted small">Komputery</div><div class="h4 mb-0" id="statComputers">-</div></div></div></div>
+            <div class="col-md-3"><div class="card stat-card"><div class="card-body"><div class="text-muted small">OU</div><div class="h4 mb-0" id="statOus">-</div></div></div></div>
+          </div>
+          <div class="mt-3 text-muted small">Łącznie obiektów (użytkownicy + grupy + komputery): <strong id="statTotal">-</strong></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-pane fade" id="search-panel" role="tabpanel" aria-labelledby="search-tab">
       <section class="card mb-4">
         <div class="card-body">
           <div class="row g-2">
@@ -38,10 +56,17 @@
                 <option value="user">Użytkownicy</option>
                 <option value="computer">Komputery</option>
                 <option value="group">Grupy zabezpieczeń</option>
+                <option value="ou-selection">Wybór OU</option>
               </select>
             </div>
-            <div class="col-md-7">
+            <div class="col-md-7" id="searchTextWrap">
               <input id="searchInput" class="form-control" placeholder="Szukaj: user, komputer, grupa..." />
+            </div>
+            <div class="col-md-7 d-none" id="searchOuWrap">
+              <div class="input-group">
+                <input id="searchOuDn" class="form-control" placeholder="Wybierz OU..." readonly />
+                <button class="btn btn-outline-secondary pick-ou-btn" data-target-input="searchOuDn" data-ou-only="1">Wybierz OU</button>
+              </div>
             </div>
             <div class="col-md-2 d-grid">
               <button id="searchBtn" class="btn btn-primary">Szukaj</button>

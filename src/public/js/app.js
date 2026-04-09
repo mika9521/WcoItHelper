@@ -2,10 +2,18 @@ const searchBtn = document.getElementById('searchBtn');
 const results = document.getElementById('results');
 const typeFilter = document.getElementById('typeFilter');
 const searchInput = document.getElementById('searchInput');
+const searchTextWrap = document.getElementById('searchTextWrap');
+const searchOuWrap = document.getElementById('searchOuWrap');
+const searchOuDn = document.getElementById('searchOuDn');
 const objectBody = document.getElementById('objectBody');
 const objectTitle = document.getElementById('objectTitle');
 const loadReportBtn = document.getElementById('loadReportBtn');
 const reportResult = document.getElementById('reportResult');
+const statUsers = document.getElementById('statUsers');
+const statGroups = document.getElementById('statGroups');
+const statComputers = document.getElementById('statComputers');
+const statOus = document.getElementById('statOus');
+const statTotal = document.getElementById('statTotal');
 
 const toast = new bootstrap.Toast(document.getElementById('appToast'));
 const objectModal = new bootstrap.Modal(document.getElementById('objectModal'));
@@ -20,6 +28,7 @@ const state = {
   referenceUserDn: null,
   copyGroups: [],
   selectedOuInputId: null,
+  selectedOuOuOnly: true,
   selectedOuDn: null,
   currentObjectDn: null,
   pendingChanges: null,
@@ -63,6 +72,19 @@ function getTypeIcon(type) {
   return { user: '👤', computer: '🖥️', group: '🛡️', ou: '📁' }[type] || '📄';
 }
 
+function getDisplayName(item) {
+  const type = detectType(item);
+  if (type === 'group') return item.cn || item.displayName || item.sAMAccountName || '-';
+  return item.displayName || item.cn || item.sAMAccountName || '-';
+}
+
+function isAccountDisabled(item) {
+  const type = detectType(item);
+  if (type !== 'user' && type !== 'computer') return false;
+  const flag = Number(item.userAccountControl || 0);
+  return (flag & 2) === 2;
+}
+
 function formatAdDate(raw) {
   if (!raw) return '-';
   const s = String(raw);
@@ -84,11 +106,18 @@ function renderResultItem(item) {
   const tr = document.createElement('tr');
   const type = detectType(item);
   const dn = item.dn || item.distinguishedName;
-  const name = type === 'group'
-    ? (item.cn || item.displayName || item.sAMAccountName || '-')
-    : (item.displayName || item.cn || item.sAMAccountName || '-');
+  const name = getDisplayName(item);
+  const disabled = isAccountDisabled(item);
+  if (disabled) tr.classList.add('table-warning');
+
+  const openDetails = () => {
+    document.querySelectorAll('#results tr.result-active').forEach((row) => row.classList.remove('result-active'));
+    tr.classList.add('result-active');
+    openObject(dn, type);
+  };
+
   tr.innerHTML = `
-    <td>${getTypeIcon(type)}</td>
+    <td><button type="button" class="btn btn-link p-0 type-open-btn" title="Szczegóły">${getTypeIcon(type)}</button></td>
     <td><button type="button" class="btn btn-link p-0 object-link">${name}</button><div class="small text-muted">${getTypeLabel(type)}</div></td>
     <td class="small">${dn || '-'}</td>
     <td>
@@ -100,8 +129,9 @@ function renderResultItem(item) {
     </td>
   `;
 
-  tr.querySelector('.object-link').addEventListener('click', () => openObject(dn, type));
-  tr.querySelector('.action-open').addEventListener('click', () => openObject(dn, type));
+  tr.querySelector('.type-open-btn').addEventListener('click', openDetails);
+  tr.querySelector('.object-link').addEventListener('click', openDetails);
+  tr.querySelector('.action-open').addEventListener('click', openDetails);
   tr.querySelector('.action-move').addEventListener('click', () => openMoveOnly(dn, item.displayName || item.cn || dn));
   tr.querySelector('.action-toggle')?.addEventListener('click', () => toggleUser(dn));
   return tr;
@@ -109,9 +139,18 @@ function renderResultItem(item) {
 
 async function runSearch() {
   try {
-    const q = encodeURIComponent(searchInput.value || '');
-    const type = encodeURIComponent(typeFilter.value);
-    const data = await api(`/api/search?q=${q}&type=${type}`);
+    const selectedType = typeFilter.value;
+    const type = selectedType === 'ou-selection' ? 'all' : selectedType;
+    const q = encodeURIComponent(searchInput?.value || '');
+    let url = `/api/search?q=${q}&type=${encodeURIComponent(type)}`;
+    if (selectedType === 'ou-selection') {
+      if (!searchOuDn.value) {
+        showToast('Najpierw wybierz OU do przeszukania', true);
+        return;
+      }
+      url = `/api/search?ouDn=${encodeURIComponent(searchOuDn.value)}&type=${encodeURIComponent(type)}`;
+    }
+    const data = await api(url);
     results.innerHTML = '';
     data.forEach((row) => results.appendChild(renderResultItem(row)));
     if (!data.length) results.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-3">Brak wyników</td></tr>';
@@ -176,7 +215,8 @@ function memberOfTemplate(data) {
 }
 
 function renderPendingMemberLine(groupDn, pendingAdd = false) {
-  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-groupdn="${escapeHtml(groupDn)}"><span class="badge text-bg-info group-badge">${escapeHtml(groupDn)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-group-btn ms-2" data-groupdn="${escapeHtml(groupDn)}">✕</button></div>`;
+  const badgeClass = pendingAdd ? 'text-bg-warning text-dark' : 'text-bg-info';
+  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-groupdn="${escapeHtml(groupDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(groupDn)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-group-btn ms-2" data-groupdn="${escapeHtml(groupDn)}">✕</button></div>`;
 }
 
 function moveTemplate(objectDn) {
@@ -184,7 +224,7 @@ function moveTemplate(objectDn) {
     <label class="form-label">Nowe OU DN</label>
     <div class="input-group">
       <input id="newOuDn" class="form-control" placeholder="Wybierz OU..." readonly />
-      <button class="btn btn-outline-secondary pick-ou-btn" data-target-input="newOuDn">Wybierz OU</button>
+      <button class="btn btn-outline-secondary pick-ou-btn" data-target-input="newOuDn" data-ou-only="1">Wybierz OU</button>
     </div>
     <div class="form-text mt-2">Zmiana zostanie wykonana po kliknięciu „Zastosuj”.</div>
     <input type="hidden" id="moveObjectDn" value="${escapeHtml(objectDn)}" />
@@ -273,6 +313,7 @@ function bindOuPickers() {
   document.querySelectorAll('.pick-ou-btn').forEach((btn) => {
     btn.onclick = async () => {
       state.selectedOuInputId = btn.dataset.targetInput;
+      state.selectedOuOuOnly = btn.dataset.ouOnly !== '0';
       state.selectedOuDn = null;
       await renderOuTree();
       ouPickerModal.show();
@@ -280,17 +321,20 @@ function bindOuPickers() {
   });
 }
 
-async function fetchOuChildren(parentDn = '') {
-  const cacheKey = parentDn || 'root';
+async function fetchOuChildren(parentDn = '', onlyOu = true) {
+  const cacheKey = `${parentDn || 'root'}::${onlyOu ? 'ou' : 'all'}`;
   if (state.ouTreeCache.has(cacheKey)) return state.ouTreeCache.get(cacheKey);
-  const data = await api(`/api/ou-children${parentDn ? `?parentDn=${encodeURIComponent(parentDn)}` : ''}`);
+  const params = new URLSearchParams();
+  if (parentDn) params.set('parentDn', parentDn);
+  if (onlyOu) params.set('ouOnly', '1');
+  const data = await api(`/api/ou-children${params.toString() ? `?${params.toString()}` : ''}`);
   state.ouTreeCache.set(cacheKey, data);
   return data;
 }
 
 async function renderOuTree() {
   const tree = document.getElementById('ouTree');
-  const rootItems = await fetchOuChildren();
+  const rootItems = await fetchOuChildren('', state.selectedOuOuOnly);
   tree.innerHTML = '<div class="small text-muted mb-2">Kliknij ▶ aby rozwinąć OU. Kliknij nazwę, aby wybrać.</div>';
 
   const rootList = document.createElement('ul');
@@ -298,11 +342,11 @@ async function renderOuTree() {
   tree.appendChild(rootList);
 
   rootItems.forEach((item) => {
-    rootList.appendChild(createOuTreeNode(item));
+    rootList.appendChild(createOuTreeNode(item, state.selectedOuOuOnly));
   });
 }
 
-function createOuTreeNode(item) {
+function createOuTreeNode(item, onlyOu = true) {
   const type = detectType(item);
   const dn = item.dn || item.distinguishedName;
   const li = document.createElement('li');
@@ -313,8 +357,7 @@ function createOuTreeNode(item) {
   header.className = 'ou-tree-node';
   header.innerHTML = `
     <button type="button" class="btn btn-sm btn-link p-0 me-1 ou-expand-btn ${type === 'ou' ? '' : 'invisible'}">▶</button>
-    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeIcon(type)} ${escapeHtml(item.displayName || item.cn || dn)}</button>
-    <div class="small text-muted ps-4">${escapeHtml(dn)}</div>
+    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeIcon(type)} ${escapeHtml(item.displayName || item.cn || item.sAMAccountName || dn.split(',')[0].replace(/^[A-Z]+=/i, ''))}</button>
   `;
   li.appendChild(header);
 
@@ -339,9 +382,9 @@ function createOuTreeNode(item) {
       return;
     }
     if (!childrenWrap.dataset.loaded) {
-      const children = await fetchOuChildren(dn);
+      const children = await fetchOuChildren(dn, onlyOu);
       children.forEach((child) => {
-        childrenWrap.appendChild(createOuTreeNode(child));
+        childrenWrap.appendChild(createOuTreeNode(child, onlyOu));
       });
       childrenWrap.dataset.loaded = '1';
     }
@@ -439,6 +482,12 @@ document.getElementById('applyCopyGroupsBtn').addEventListener('click', async ()
   showToast('Grupy dodane do zmian oczekujących');
 });
 
+typeFilter?.addEventListener('change', () => {
+  const isOuSelection = typeFilter.value === 'ou-selection';
+  searchTextWrap?.classList.toggle('d-none', isOuSelection);
+  searchOuWrap?.classList.toggle('d-none', !isOuSelection);
+});
+
 searchBtn.addEventListener('click', runSearch);
 searchInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
@@ -456,6 +505,19 @@ loadReportBtn.addEventListener('click', async () => {
     showToast(error.message, true);
   }
 });
+
+async function loadDashboardStats() {
+  try {
+    const data = await api('/api/dashboard/stats');
+    if (statUsers) statUsers.textContent = data.users;
+    if (statGroups) statGroups.textContent = data.groups;
+    if (statComputers) statComputers.textContent = data.computers;
+    if (statOus) statOus.textContent = data.ous;
+    if (statTotal) statTotal.textContent = data.total;
+  } catch (error) {
+    showToast(`Dashboard: ${error.message}`, true);
+  }
+}
 
 applyObjectChangesBtn.addEventListener('click', async () => {
   try {
@@ -531,3 +593,4 @@ function cssEscapeValue(value) {
 }
 
 bindOuPickers();
+loadDashboardStats();

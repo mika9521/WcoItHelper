@@ -1,6 +1,7 @@
 const express = require('express');
 const {
   searchObjects,
+  searchObjectsInOu,
   getObjectDetails,
   updateUserGroups,
   copyGroupsFromReference,
@@ -8,7 +9,8 @@ const {
   createUser,
   createGroup,
   setAccountEnabled,
-  listOuChildren
+  listOuChildren,
+  getDashboardStats
 } = require('../services/ad/adService');
 const { staleLogons } = require('../services/reports/reportService');
 
@@ -16,8 +18,10 @@ const router = express.Router();
 
 router.get('/api/search', async (req, res) => {
   try {
-    const { q = '', type = 'all' } = req.query;
-    const results = await searchObjects(q, type);
+    const { q = '', type = 'all', ouDn = '' } = req.query;
+    const results = ouDn
+      ? await searchObjectsInOu(ouDn, type)
+      : await searchObjects(q, type);
     res.json(results);
   } catch (error) {
     res.status(error.status || 500).json({ message: error.message });
@@ -85,8 +89,17 @@ router.post('/api/group/create', async (req, res) => {
 
 router.get('/api/ou-children', async (req, res) => {
   try {
-    const { parentDn } = req.query;
-    const data = await listOuChildren(parentDn || undefined);
+    const { parentDn, ouOnly } = req.query;
+    const data = await listOuChildren(parentDn || undefined, ouOnly === '1');
+    res.json(data);
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.get('/api/dashboard/stats', async (req, res) => {
+  try {
+    const data = await getDashboardStats();
     res.json(data);
   } catch (error) {
     res.status(error.status || 500).json({ message: error.message });
