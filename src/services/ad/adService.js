@@ -5,7 +5,7 @@ const { normalizeObject } = require('./adMapper');
 
 const DEFAULT_ATTRS = [
   'cn', 'displayName', 'sAMAccountName', 'userPrincipalName', 'mail', 'department', 'title',
-  'whenCreated', 'lastLogonTimestamp', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName', 'userAccountControl', 'name', 'ou'
+  'whenCreated', 'lastLogonTimestamp', 'lastLogon', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName', 'userAccountControl', 'name', 'ou'
 ];
 
 function buildUpn(login) {
@@ -139,7 +139,13 @@ async function createUser(payload) {
     lastName,
     login,
     password,
-    description
+    description,
+    mustChangePasswordAtNextLogon,
+    userCannotChangePassword,
+    passwordNeverExpires,
+    accountDisabled,
+    accountExpiresMode,
+    accountExpiresDate
   } = payload;
 
   const cn = `${firstName} ${lastName}`;
@@ -162,7 +168,30 @@ async function createUser(payload) {
     });
 
     await client.modify(dn, [{ operation: 'replace', modification: { unicodePwd: encodePassword(password) } }]);
-    await client.modify(dn, [{ operation: 'replace', modification: { userAccountControl: '512' } }]);
+    const UAC = {
+      NORMAL_ACCOUNT: 0x0200,
+      ACCOUNTDISABLE: 0x0002,
+      PASSWD_CANT_CHANGE: 0x0040,
+      DONT_EXPIRE_PASSWORD: 0x10000
+    };
+    let userAccountControl = UAC.NORMAL_ACCOUNT;
+    if (Boolean(accountDisabled)) userAccountControl |= UAC.ACCOUNTDISABLE;
+    if (Boolean(userCannotChangePassword)) userAccountControl |= UAC.PASSWD_CANT_CHANGE;
+    if (Boolean(passwordNeverExpires)) userAccountControl |= UAC.DONT_EXPIRE_PASSWORD;
+
+    await client.modify(dn, [{ operation: 'replace', modification: { userAccountControl: String(userAccountControl) } }]);
+
+    if (Boolean(mustChangePasswordAtNextLogon)) {
+      await client.modify(dn, [{ operation: 'replace', modification: { pwdLastSet: '0' } }]);
+    }
+
+    if (accountExpiresMode === 'date' && accountExpiresDate) {
+      const fileTime = toWindowsFileTime(accountExpiresDate, true);
+      if (!fileTime) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
+      await client.modify(dn, [{ operation: 'replace', modification: { accountExpires: fileTime } }]);
+    } else {
+      await client.modify(dn, [{ operation: 'replace', modification: { accountExpires: '0' } }]);
+    }
 
     return { dn, login };
   });
