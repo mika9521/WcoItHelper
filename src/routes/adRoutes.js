@@ -9,6 +9,7 @@ const {
   createUser,
   createGroup,
   setAccountEnabled,
+  updateUserSettings,
   listOuChildren,
   getDashboardStats
 } = require('../services/ad/adService');
@@ -72,6 +73,16 @@ router.post('/api/object/enabled', async (req, res) => {
   try {
     const { objectDn, enabled } = req.body;
     const result = await setAccountEnabled(objectDn, Boolean(enabled));
+    res.json(result);
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.post('/api/user/settings', async (req, res) => {
+  try {
+    const { objectDn, ...payload } = req.body;
+    const result = await updateUserSettings(objectDn, payload);
     res.json(result);
   } catch (error) {
     res.status(error.status || 500).json({ message: error.message });

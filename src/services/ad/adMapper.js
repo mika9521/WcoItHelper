@@ -5,6 +5,8 @@ function normalizeObject(entry) {
     objectClass: entry.objectClass,
     objectCategory: entry.objectCategory,
     sAMAccountName: entry.sAMAccountName,
+    name: entry.name,
+    ou: entry.ou,
     userPrincipalName: entry.userPrincipalName,
     displayName: entry.displayName,
     mail: entry.mail,
