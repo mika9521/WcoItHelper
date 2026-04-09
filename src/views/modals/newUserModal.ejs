@@ -17,6 +17,45 @@
           <input class="form-control" name="ouDn" id="newUserOuDn" placeholder="Wybierz OU..." readonly required />
           <button type="button" class="btn btn-outline-secondary pick-ou-btn" data-target-input="newUserOuDn" data-ou-only="1">Wybierz OU</button>
         </div>
+        <div class="mt-3">
+          <div class="fw-semibold mb-2">Opcje konta</div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="mustChangePasswordAtNextLogon" id="newUserMustChangePwd">
+            <label class="form-check-label" for="newUserMustChangePwd">Użytkownik musi zmienić hasło przy następnym logowaniu</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="userCannotChangePassword" id="newUserCannotChangePwd">
+            <label class="form-check-label" for="newUserCannotChangePwd">Użytkownik nie może zmienić hasła</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="passwordNeverExpires" id="newUserPwdNeverExpires">
+            <label class="form-check-label" for="newUserPwdNeverExpires">Hasło nigdy nie wygasa</label>
+          </div>
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" name="accountDisabled" id="newUserAccountDisabled">
+            <label class="form-check-label" for="newUserAccountDisabled">Konto jest wyłączone</label>
+          </div>
+          <div class="mt-2">
+            <div class="small fw-semibold mb-1">Wygasanie konta</div>
+            <div class="input-group input-group-sm">
+              <span class="input-group-text">Tryb</span>
+              <div class="form-control d-flex gap-3 align-items-center">
+                <div class="form-check m-0">
+                  <input class="form-check-input" type="radio" name="accountExpiresModeNewUser" id="newUserExpiresNever" value="never" checked>
+                  <label class="form-check-label" for="newUserExpiresNever">Nigdy</label>
+                </div>
+                <div class="form-check m-0">
+                  <input class="form-check-input" type="radio" name="accountExpiresModeNewUser" id="newUserExpiresDate" value="date">
+                  <label class="form-check-label" for="newUserExpiresDate">Z datą</label>
+                </div>
+              </div>
+            </div>
+            <div class="input-group input-group-sm mt-1">
+              <span class="input-group-text">Data</span>
+              <input class="form-control" type="date" name="accountExpiresDate" disabled>
+            </div>
+          </div>
+        </div>
         <textarea class="form-control mt-2" name="description" placeholder="Opis"></textarea>
       </div>
       <div class="modal-footer">

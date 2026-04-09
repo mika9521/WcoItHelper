@@ -80,9 +80,11 @@ function getNameFromDn(item) {
 
 function getDisplayName(item) {
   const type = detectType(item);
-  const generic = item.displayName || item.name || item.cn || item.ou || item.sAMAccountName || getNameFromDn(item);
-  if (type === 'group') return item.cn || item.name || item.displayName || item.sAMAccountName || getNameFromDn(item) || '-';
-  if (type === 'ou') return item.ou || item.name || item.displayName || item.cn || getNameFromDn(item) || '-';
+  const pick = (...values) => values.find((value) => String(value ?? '').trim() !== '');
+  const fromDn = getNameFromDn(item);
+  const generic = pick(item.displayName, item.name, item.cn, item.ou, item.sAMAccountName, fromDn);
+  if (type === 'group') return pick(item.cn, item.name, item.displayName, item.sAMAccountName, fromDn) || '-';
+  if (type === 'ou') return pick(item.ou, item.name, item.displayName, item.cn, item.sAMAccountName, fromDn) || '-';
   return generic || '-';
 }
 
@@ -196,6 +198,66 @@ function tabsTemplate(tabs) {
   return `<ul class="nav nav-tabs">${nav}</ul><div class="tab-content border border-top-0 rounded-bottom">${content}</div>`;
 }
 
+function toArray(value) {
+  if (value === undefined || value === null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function inferAdSyntax(attribute, values) {
+  const attr = String(attribute || '').toLowerCase();
+  if (attr.includes('dn') || attr === 'distinguishedname' || attr === 'memberof' || attr === 'objectcategory') return 'DN';
+  if (attr.includes('time') || attr.startsWith('when') || attr.includes('logon') || attr.includes('expires') || attr === 'pwdlastset') return 'Integer8';
+  if (attr.includes('count') || attr.includes('control') || attr.includes('code') || attr.includes('type') || attr.includes('groupid') || attr.includes('instance')) return 'Integer';
+  if (values.some((value) => value instanceof Uint8Array)) return 'OctetString';
+  if (attr === 'objectclass') return 'OID';
+  return 'DirectoryString';
+}
+
+function formatDevValue(attribute, value) {
+  if (value instanceof Uint8Array) return Array.from(value).join(' ');
+  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
+  const str = String(value ?? '');
+  if (/(time|when|logon|expires|pwdlastset)/i.test(attribute)) return formatAdDate(str);
+  return str;
+}
+
+function devTemplate(data) {
+  const rows = Object.entries(data || {})
+    .filter(([key]) => key !== 'controls')
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([attribute, rawValue]) => {
+      const values = toArray(rawValue);
+      const syntax = inferAdSyntax(attribute, values);
+      const count = values.length || 1;
+      const printableValue = values.length ? values.map((value) => formatDevValue(attribute, value)).join('; ') : '-';
+      return `
+        <tr>
+          <td class="text-nowrap">${escapeHtml(attribute)}</td>
+          <td class="text-nowrap">${escapeHtml(syntax)}</td>
+          <td class="text-end">${count}</td>
+          <td class="font-monospace small">${escapeHtml(printableValue)}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  return `
+    <div class="table-responsive">
+      <table class="table table-sm table-striped table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Attribute</th>
+            <th>Syntax</th>
+            <th class="text-end">Count</th>
+            <th>Value(s)</th>
+          </tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="4" class="text-muted">Brak danych</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+}
+
 function dataTableTemplate(data) {
   const rows = [
     ['DN', data.dn],
@@ -258,7 +320,16 @@ function userSettingsTemplate(data) {
       <div>
         <div class="fw-semibold mb-2">Folder macierzysty</div>
         <div class="mb-2"><label class="form-label">Ścieżka lokalna</label><input class="form-control" name="homeDirectory" value="${escapeHtml(data.homeDirectory || '')}" /></div>
-        <div><label class="form-label">Podłącz (litera) do</label><input class="form-control" name="homeDrive" placeholder="np. H:" value="${escapeHtml(data.homeDrive || '')}" /></div>
+        <div>
+          <label class="form-label">Podłącz (litera) do</label>
+          <select class="form-select" name="homeDrive">
+            <option value="">— wybierz —</option>
+            ${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) => {
+              const value = `${letter}:`;
+              return `<option value="${value}" ${String(data.homeDrive || '').toUpperCase() === value ? 'selected' : ''}>${value}</option>`;
+            }).join('')}
+          </select>
+        </div>
       </div>
       <div><button type="submit" class="btn btn-primary btn-sm">Zapisz ustawienia</button></div>
     </form>
@@ -267,22 +338,33 @@ function userSettingsTemplate(data) {
 
 function userTemplate(data) {
   return tabsTemplate([
+    { id: 'u-data', title: 'Dane', content: dataTableTemplate(data) },
     { id: 'u-settings', title: 'Ustawienia', content: userSettingsTemplate(data) },
-    { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
+    { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'u-dev', title: 'DEV', content: devTemplate(data) }
   ]);
 }
 
 function computerTemplate(data) {
   return tabsTemplate([
     { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) },
-    { id: 'c-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
+    { id: 'c-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'c-dev', title: 'DEV', content: devTemplate(data) }
   ]);
 }
 
 function groupTemplate(data) {
   return tabsTemplate([
     { id: 'g-data', title: 'Dane', content: dataTableTemplate(data) },
-    { id: 'g-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
+    { id: 'g-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'g-dev', title: 'DEV', content: devTemplate(data) }
+  ]);
+}
+
+function ouTemplate(data) {
+  return tabsTemplate([
+    { id: 'o-data', title: 'Dane obiektu', content: dataTableTemplate(data) },
+    { id: 'o-dev', title: 'DEV', content: devTemplate(data) }
   ]);
 }
 
@@ -308,7 +390,13 @@ async function openObject(dn, typeHint) {
     const data = await api(`/api/object?dn=${encodeURIComponent(dn)}`);
     const type = typeHint || detectType(data);
     objectTitle.textContent = `${getDisplayName(data)} (${getTypeLabel(type)})`;
-    objectBody.innerHTML = type === 'computer' ? computerTemplate(data) : type === 'group' ? groupTemplate(data) : userTemplate(data);
+    objectBody.innerHTML = type === 'computer'
+      ? computerTemplate(data)
+      : type === 'group'
+        ? groupTemplate(data)
+        : type === 'ou'
+          ? ouTemplate(data)
+          : userTemplate(data);
     state.currentObjectDn = data.distinguishedName || data.dn || dn;
     state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
     applyObjectChangesBtn.classList.remove('d-none');
@@ -668,12 +756,27 @@ document.getElementById('newUserForm').addEventListener('submit', async (event) 
   event.preventDefault();
   try {
     const payload = Object.fromEntries(new FormData(event.target).entries());
+    payload.mustChangePasswordAtNextLogon = parseTruthy(payload.mustChangePasswordAtNextLogon);
+    payload.userCannotChangePassword = parseTruthy(payload.userCannotChangePassword);
+    payload.passwordNeverExpires = parseTruthy(payload.passwordNeverExpires);
+    payload.accountDisabled = parseTruthy(payload.accountDisabled);
+    payload.accountExpiresMode = payload.accountExpiresModeNewUser || 'never';
+    delete payload.accountExpiresModeNewUser;
     await api('/api/user/create', { method: 'POST', body: JSON.stringify(payload) });
     showToast('Użytkownik utworzony');
     event.target.reset();
   } catch (error) {
     showToast(error.message, true);
   }
+});
+
+document.querySelectorAll('input[name="accountExpiresModeNewUser"]').forEach((radio) => {
+  radio.addEventListener('change', (event) => {
+    const form = event.target.closest('form');
+    const dateInput = form?.querySelector('input[name="accountExpiresDate"]');
+    if (!dateInput) return;
+    dateInput.disabled = event.target.value !== 'date';
+  });
 });
 
 document.getElementById('newGroupForm').addEventListener('submit', async (event) => {
