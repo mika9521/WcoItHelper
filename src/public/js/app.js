@@ -72,10 +72,18 @@ function getTypeIcon(type) {
   return { user: '👤', computer: '🖥️', group: '🛡️', ou: '📁' }[type] || '📄';
 }
 
+function getNameFromDn(item) {
+  const dn = String(item?.dn || item?.distinguishedName || '');
+  if (!dn) return '';
+  return dn.split(',')[0].replace(/^[A-Z]+=/i, '').trim();
+}
+
 function getDisplayName(item) {
   const type = detectType(item);
-  if (type === 'group') return item.cn || item.displayName || item.sAMAccountName || '-';
-  return item.displayName || item.cn || item.sAMAccountName || '-';
+  const generic = item.displayName || item.name || item.cn || item.ou || item.sAMAccountName || getNameFromDn(item);
+  if (type === 'group') return item.cn || item.name || item.displayName || item.sAMAccountName || getNameFromDn(item) || '-';
+  if (type === 'ou') return item.ou || item.name || item.displayName || item.cn || getNameFromDn(item) || '-';
+  return generic || '-';
 }
 
 function isAccountDisabled(item) {
@@ -100,6 +108,29 @@ function formatAdDate(raw) {
     }
   }
   return s;
+}
+
+function parseTruthy(value) {
+  const v = String(value ?? '').toLowerCase();
+  return v === 'true' || v === '1' || v === 'on';
+}
+
+function isUacFlagSet(data, flag) {
+  const uac = Number(data?.userAccountControl || 0);
+  return (uac & flag) === flag;
+}
+
+function formatAccountExpiresDate(raw) {
+  const s = String(raw || '');
+  if (!s || s === '0' || s === '9223372036854775807') return '';
+  if (/^\d+$/.test(s)) {
+    const filetime = Number(s);
+    const epochMs = Math.floor(filetime / 10000 - 11644473600000);
+    if (Number.isFinite(epochMs) && epochMs > 0) {
+      return new Date(epochMs).toISOString().slice(0, 10);
+    }
+  }
+  return '';
 }
 
 function renderResultItem(item) {
@@ -132,7 +163,7 @@ function renderResultItem(item) {
   tr.querySelector('.type-open-btn').addEventListener('click', openDetails);
   tr.querySelector('.object-link').addEventListener('click', openDetails);
   tr.querySelector('.action-open').addEventListener('click', openDetails);
-  tr.querySelector('.action-move').addEventListener('click', () => openMoveOnly(dn, item.displayName || item.cn || dn));
+  tr.querySelector('.action-move').addEventListener('click', () => openMoveOnly(dn, getDisplayName(item) || dn));
   tr.querySelector('.action-toggle')?.addEventListener('click', () => toggleUser(dn));
   return tr;
 }
@@ -179,27 +210,6 @@ function dataTableTemplate(data) {
   return `<div class="d-grid gap-2">${rows.map(([k, v]) => `<div class="input-group input-group-sm"><span class="input-group-text">${k}</span><input class="form-control" readonly value="${escapeHtml(v || '-')}" /></div>`).join('')}</div>`;
 }
 
-function userTemplate(data) {
-  return tabsTemplate([
-    { id: 'u-data', title: 'Dane', content: dataTableTemplate(data) },
-    { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
-  ]);
-}
-
-function computerTemplate(data) {
-  return tabsTemplate([
-    { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) }
-  ]);
-}
-
-function groupTemplate(data) {
-  const members = Array.isArray(data.member) ? data.member : data.member ? [data.member] : [];
-  return tabsTemplate([
-    { id: 'g-data', title: 'Dane', content: dataTableTemplate(data) },
-    { id: 'g-members', title: 'Członkowie', content: `<div class="mb-2">Liczba członków: <strong>${members.length}</strong></div>${members.map((m) => `<span class="badge text-bg-secondary me-1 mb-1">${escapeHtml(m)}</span>`).join('') || '<span class="text-muted">Brak członków</span>'}` }
-  ]);
-}
-
 function memberOfTemplate(data) {
   const groups = Array.isArray(data.memberOf) ? data.memberOf : [];
   const userDn = data.distinguishedName || data.dn;
@@ -212,6 +222,68 @@ function memberOfTemplate(data) {
       <button class="btn btn-outline-secondary btn-sm" id="openReferenceModal" data-userdn="${userDn}">Inny użytkownik</button>
     </div>
   `;
+}
+
+function userSettingsTemplate(data) {
+  const mustChangePwd = String(data.pwdLastSet || '') === '0';
+  const passwordNeverExpires = isUacFlagSet(data, 0x10000);
+  const accountDisabled = isUacFlagSet(data, 0x0002);
+  const smartcardRequired = isUacFlagSet(data, 0x40000);
+  const userCannotChangePassword = isUacFlagSet(data, 0x0040);
+  const accountExpiresDate = formatAccountExpiresDate(data.accountExpires);
+  const expiresNever = !accountExpiresDate;
+
+  return `
+    <form id="userSettingsForm" class="d-grid gap-3">
+      <div><label class="form-label">Adres email</label><input class="form-control" name="mail" value="${escapeHtml(data.mail || '')}" /></div>
+      <div>
+        <div class="fw-semibold mb-2">Opcje konta</div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="mustChangePasswordAtNextLogon" ${mustChangePwd ? 'checked' : ''}><label class="form-check-label">Użytkownik musi zmienić hasło przy następnym logowaniu</label></div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="userCannotChangePassword" ${userCannotChangePassword ? 'checked' : ''}><label class="form-check-label">Użytkownik nie może zmienić hasła</label></div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="passwordNeverExpires" ${passwordNeverExpires ? 'checked' : ''}><label class="form-check-label">Hasło nigdy nie wygasa</label></div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="accountDisabled" ${accountDisabled ? 'checked' : ''}><label class="form-check-label">Konto jest wyłączone</label></div>
+        <div class="form-check"><input class="form-check-input" type="checkbox" name="smartcardRequired" ${smartcardRequired ? 'checked' : ''}><label class="form-check-label">Logowanie interakcyjne wymaga karty inteligentnej</label></div>
+      </div>
+      <div>
+        <div class="fw-semibold mb-2">Wygasanie konta</div>
+        <div class="form-check"><input class="form-check-input" type="radio" name="accountExpiresMode" value="never" ${expiresNever ? 'checked' : ''}><label class="form-check-label">Nigdy</label></div>
+        <div class="form-check"><input class="form-check-input" type="radio" name="accountExpiresMode" value="date" ${expiresNever ? '' : 'checked'}><label class="form-check-label">Z końcem</label></div>
+        <input class="form-control form-control-sm mt-1" type="date" name="accountExpiresDate" value="${escapeHtml(accountExpiresDate)}" ${expiresNever ? 'disabled' : ''} />
+      </div>
+      <div>
+        <div class="fw-semibold mb-2">Sekcja profilu użytkownika</div>
+        <div class="mb-2"><label class="form-label">Ścieżka profilu</label><input class="form-control" name="profilePath" value="${escapeHtml(data.profilePath || '')}" /></div>
+        <div><label class="form-label">Ścieżka logowania</label><input class="form-control" name="scriptPath" value="${escapeHtml(data.scriptPath || '')}" /></div>
+      </div>
+      <div>
+        <div class="fw-semibold mb-2">Folder macierzysty</div>
+        <div class="mb-2"><label class="form-label">Ścieżka lokalna</label><input class="form-control" name="homeDirectory" value="${escapeHtml(data.homeDirectory || '')}" /></div>
+        <div><label class="form-label">Podłącz (litera) do</label><input class="form-control" name="homeDrive" placeholder="np. H:" value="${escapeHtml(data.homeDrive || '')}" /></div>
+      </div>
+      <div><button type="submit" class="btn btn-primary btn-sm">Zapisz ustawienia</button></div>
+    </form>
+  `;
+}
+
+function userTemplate(data) {
+  return tabsTemplate([
+    { id: 'u-settings', title: 'Ustawienia', content: userSettingsTemplate(data) },
+    { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
+  ]);
+}
+
+function computerTemplate(data) {
+  return tabsTemplate([
+    { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) },
+    { id: 'c-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
+  ]);
+}
+
+function groupTemplate(data) {
+  return tabsTemplate([
+    { id: 'g-data', title: 'Dane', content: dataTableTemplate(data) },
+    { id: 'g-memberof', title: 'Członek grup', content: memberOfTemplate(data) }
+  ]);
 }
 
 function renderPendingMemberLine(groupDn, pendingAdd = false) {
@@ -235,11 +307,11 @@ async function openObject(dn, typeHint) {
   try {
     const data = await api(`/api/object?dn=${encodeURIComponent(dn)}`);
     const type = typeHint || detectType(data);
-    objectTitle.textContent = `${data.displayName || data.cn || data.sAMAccountName} (${getTypeLabel(type)})`;
+    objectTitle.textContent = `${getDisplayName(data)} (${getTypeLabel(type)})`;
     objectBody.innerHTML = type === 'computer' ? computerTemplate(data) : type === 'group' ? groupTemplate(data) : userTemplate(data);
     state.currentObjectDn = data.distinguishedName || data.dn || dn;
     state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
-    applyObjectChangesBtn.classList.toggle('d-none', type === 'group');
+    applyObjectChangesBtn.classList.remove('d-none');
     bindModalActions();
     objectModal.show();
   } catch (error) {
@@ -271,7 +343,7 @@ function renderLookupItem(container, item, onPick) {
   btn.type = 'button';
   const type = detectType(item);
   btn.className = 'list-group-item list-group-item-action';
-  btn.innerHTML = `${getTypeIcon(type)} ${escapeHtml(item.displayName || item.cn || item.sAMAccountName)}<div class="small text-muted">${escapeHtml(item.dn || item.distinguishedName || '')}</div>`;
+  btn.innerHTML = `${getTypeIcon(type)} ${escapeHtml(getDisplayName(item))}<div class="small text-muted">${escapeHtml(item.dn || item.distinguishedName || '')}</div>`;
   btn.addEventListener('click', () => onPick(item));
   container.appendChild(btn);
 }
@@ -304,6 +376,44 @@ function bindModalActions() {
 
   document.getElementById('newOuDn')?.addEventListener('change', (event) => {
     state.pendingChanges.moveTargetDn = event.target.value || null;
+  });
+
+  document.querySelectorAll('input[name="accountExpiresMode"]').forEach((radio) => {
+    if (radio.dataset.bound) return;
+    radio.dataset.bound = '1';
+    radio.addEventListener('change', (event) => {
+      const form = event.target.closest('form');
+      const dateInput = form?.querySelector('input[name="accountExpiresDate"]');
+      if (!dateInput) return;
+      dateInput.disabled = event.target.value !== 'date';
+    });
+  });
+
+  document.getElementById('userSettingsForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const formData = new FormData(event.target);
+      const payload = {
+        objectDn: state.currentObjectDn,
+        mail: formData.get('mail') || '',
+        mustChangePasswordAtNextLogon: parseTruthy(formData.get('mustChangePasswordAtNextLogon')),
+        userCannotChangePassword: parseTruthy(formData.get('userCannotChangePassword')),
+        passwordNeverExpires: parseTruthy(formData.get('passwordNeverExpires')),
+        accountDisabled: parseTruthy(formData.get('accountDisabled')),
+        smartcardRequired: parseTruthy(formData.get('smartcardRequired')),
+        accountExpiresMode: formData.get('accountExpiresMode') || 'never',
+        accountExpiresDate: formData.get('accountExpiresDate') || '',
+        profilePath: formData.get('profilePath') || '',
+        scriptPath: formData.get('scriptPath') || '',
+        homeDirectory: formData.get('homeDirectory') || '',
+        homeDrive: formData.get('homeDrive') || ''
+      };
+      await api('/api/user/settings', { method: 'POST', body: JSON.stringify(payload) });
+      showToast('Ustawienia użytkownika zapisane');
+      await openObject(state.currentObjectDn, 'user');
+    } catch (error) {
+      showToast(error.message, true);
+    }
   });
 
   bindOuPickers();
@@ -357,7 +467,7 @@ function createOuTreeNode(item, onlyOu = true) {
   header.className = 'ou-tree-node';
   header.innerHTML = `
     <button type="button" class="btn btn-sm btn-link p-0 me-1 ou-expand-btn ${type === 'ou' ? '' : 'invisible'}">▶</button>
-    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeIcon(type)} ${escapeHtml(item.displayName || item.cn || item.sAMAccountName || dn.split(',')[0].replace(/^[A-Z]+=/i, ''))}</button>
+    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeIcon(type)} ${escapeHtml(getDisplayName(item))}</button>
   `;
   li.appendChild(header);
 

@@ -5,7 +5,7 @@ const { normalizeObject } = require('./adMapper');
 
 const DEFAULT_ATTRS = [
   'cn', 'displayName', 'sAMAccountName', 'userPrincipalName', 'mail', 'department', 'title',
-  'whenCreated', 'lastLogonTimestamp', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName', 'userAccountControl'
+  'whenCreated', 'lastLogonTimestamp', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName', 'userAccountControl', 'name', 'ou'
 ];
 
 function buildUpn(login) {
@@ -199,6 +199,86 @@ async function setAccountEnabled(objectDn, enabled) {
   });
 }
 
+function toWindowsFileTime(dateValue, endOfDay = false) {
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return null;
+  if (endOfDay) date.setHours(23, 59, 59, 999);
+  const msSince1601 = date.getTime() + 11644473600000;
+  return String(msSince1601 * 10000);
+}
+
+async function updateUserSettings(objectDn, payload = {}) {
+  return withServiceBind(async (client) => {
+    const { searchEntries } = await client.search(objectDn, {
+      scope: 'base',
+      attributes: ['userAccountControl']
+    });
+    if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
+
+    const currentUac = Number(searchEntries[0].userAccountControl || 512);
+    const {
+      mail,
+      mustChangePasswordAtNextLogon,
+      userCannotChangePassword,
+      passwordNeverExpires,
+      accountDisabled,
+      smartcardRequired,
+      accountExpiresMode,
+      accountExpiresDate,
+      profilePath,
+      scriptPath,
+      homeDirectory,
+      homeDrive
+    } = payload;
+
+    const UAC = {
+      ACCOUNTDISABLE: 0x0002,
+      PASSWD_CANT_CHANGE: 0x0040,
+      DONT_EXPIRE_PASSWORD: 0x10000,
+      SMARTCARD_REQUIRED: 0x40000
+    };
+
+    let nextUac = currentUac;
+    const setFlag = (enabled, bit) => {
+      if (typeof enabled !== 'boolean') return;
+      nextUac = enabled ? (nextUac | bit) : (nextUac & ~bit);
+    };
+    setFlag(Boolean(accountDisabled), UAC.ACCOUNTDISABLE);
+    setFlag(Boolean(userCannotChangePassword), UAC.PASSWD_CANT_CHANGE);
+    setFlag(Boolean(passwordNeverExpires), UAC.DONT_EXPIRE_PASSWORD);
+    setFlag(Boolean(smartcardRequired), UAC.SMARTCARD_REQUIRED);
+
+    const modifications = [
+      { operation: 'replace', modification: { userAccountControl: String(nextUac) } },
+      { operation: 'replace', modification: { mail: mail || [] } },
+      { operation: 'replace', modification: { profilePath: profilePath || [] } },
+      { operation: 'replace', modification: { scriptPath: scriptPath || [] } },
+      { operation: 'replace', modification: { homeDirectory: homeDirectory || [] } },
+      { operation: 'replace', modification: { homeDrive: homeDrive || [] } }
+    ];
+
+    if (mustChangePasswordAtNextLogon === true) {
+      modifications.push({ operation: 'replace', modification: { pwdLastSet: '0' } });
+    } else if (mustChangePasswordAtNextLogon === false) {
+      modifications.push({ operation: 'replace', modification: { pwdLastSet: '-1' } });
+    }
+
+    if (accountExpiresMode === 'date' && accountExpiresDate) {
+      const fileTime = toWindowsFileTime(accountExpiresDate, true);
+      if (!fileTime) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
+      modifications.push({ operation: 'replace', modification: { accountExpires: fileTime } });
+    } else if (accountExpiresMode === 'never') {
+      modifications.push({ operation: 'replace', modification: { accountExpires: '0' } });
+    }
+
+    for (const mod of modifications) {
+      await client.modify(objectDn, [mod]);
+    }
+
+    return { updated: true };
+  });
+}
+
 async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false) {
   const filter = onlyOu
     ? '(|(objectClass=organizationalUnit)(objectClass=container))'
@@ -207,7 +287,7 @@ async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false) {
     const { searchEntries } = await client.search(parentDn, {
       scope: 'one',
       filter,
-      attributes: ['dn', 'cn', 'displayName', 'distinguishedName', 'objectClass']
+      attributes: ['dn', 'cn', 'displayName', 'distinguishedName', 'objectClass', 'name', 'ou']
     });
     return searchEntries.map((entry) => normalizeObject(entry));
   });
@@ -265,6 +345,7 @@ module.exports = {
   createUser,
   createGroup,
   setAccountEnabled,
+  updateUserSettings,
   listOuChildren,
   getDashboardStats
 };
