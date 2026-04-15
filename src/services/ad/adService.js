@@ -144,7 +144,7 @@ async function copyGroupsFromReference(targetUserDn, referenceUserDn, selectedGr
 async function moveObject(objectDn, newParentOuDn, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
     const rdn = objectDn.split(',')[0];
-    await client.modifyDN(objectDn, rdn, true, newParentOuDn);
+    await client.modifyDN(objectDn, `${rdn},${newParentOuDn}`);
     return { moved: true };
   });
 }
@@ -258,7 +258,7 @@ async function softDeleteAccount(objectDn, authContext = null) {
     await client.modify(objectDn, toChange('replace', 'userAccountControl', String(next)));
 
     const rdn = objectDn.split(',')[0];
-    await client.modifyDN(objectDn, rdn, true, BLOCKED_ACCOUNTS_OU_DN);
+    await client.modifyDN(objectDn, `${rdn},${BLOCKED_ACCOUNTS_OU_DN}`);
 
     return { updated: true, movedTo: BLOCKED_ACCOUNTS_OU_DN };
   });

@@ -107,8 +107,25 @@
     </section>
 
     <section class="tab-pane fade" id="reports-panel" role="tabpanel" aria-labelledby="reports-tab">
-      <section class="card">
-        <div class="card-header">Raporty</div>
+      <section class="card mb-4">
+        <div class="card-header">Lista raportów</div>
+        <div class="card-body">
+          <div class="list-group" id="reportsList">
+            <button class="list-group-item list-group-item-action report-link active" data-report="stale-logons" type="button">
+              Nieaktywne konta AD
+            </button>
+            <button class="list-group-item list-group-item-action report-link" data-report="portal-activity" type="button">
+              Aktywność portalu
+            </button>
+            <button class="list-group-item list-group-item-action report-link" data-report="login-history" type="button">
+              Historia logowań
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card report-page" data-report-page="stale-logons">
+        <div class="card-header">Raport: nieaktywne konta AD</div>
         <div class="card-body">
           <div class="input-group mb-3" style="max-width: 320px;">
             <span class="input-group-text">Starsze niż</span>
@@ -119,14 +136,54 @@
           <div id="reportResult" class="small"></div>
         </div>
       </section>
-      <section class="card mt-4">
-        <div class="card-header">Ostatnia aktywność w portalu</div>
+
+      <section class="card mt-4 report-page d-none" data-report-page="portal-activity">
+        <div class="card-header">Raport: aktywność portalu</div>
         <div class="card-body">
-          <div id="auditRecentList" class="small text-muted">Ładowanie…</div>
+          <form id="portalActivityFilterForm" class="row g-2 mb-3">
+            <div class="col-md-3">
+              <input id="portalActivitySearch" class="form-control form-control-sm" placeholder="Szukaj: użytkownik, akcja, DN..." />
+            </div>
+            <div class="col-md-2">
+              <input id="portalActivityFrom" type="date" class="form-control form-control-sm" />
+            </div>
+            <div class="col-md-2">
+              <input id="portalActivityTo" type="date" class="form-control form-control-sm" />
+            </div>
+            <div class="col-md-2">
+              <select id="portalActivityAction" class="form-select form-select-sm">
+                <option value="">Wszystkie akcje</option>
+              </select>
+            </div>
+            <div class="col-md-1">
+              <select id="portalActivityStatus" class="form-select form-select-sm">
+                <option value="">Status</option>
+                <option value="success">success</option>
+                <option value="error">error</option>
+              </select>
+            </div>
+            <div class="col-md-1">
+              <select id="portalActivityPageSize" class="form-select form-select-sm">
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+              </select>
+            </div>
+            <div class="col-md-1 d-grid">
+              <button class="btn btn-sm btn-primary" type="submit">Filtruj</button>
+            </div>
+          </form>
+          <div id="portalActivityList" class="small text-muted">Ładowanie…</div>
+          <div class="d-flex justify-content-between align-items-center mt-3">
+            <button id="portalActivityPrev" class="btn btn-sm btn-outline-secondary">← Poprzednia</button>
+            <div id="portalActivityPaginationInfo" class="small text-muted">-</div>
+            <button id="portalActivityNext" class="btn btn-sm btn-outline-secondary">Następna →</button>
+          </div>
         </div>
       </section>
-      <section class="card mt-4">
-        <div class="card-header">Historia logowań</div>
+
+      <section class="card mt-4 report-page d-none" data-report-page="login-history">
+        <div class="card-header">Raport: historia logowań</div>
         <div class="card-body">
           <div id="loginHistoryList" class="small text-muted">Ładowanie…</div>
         </div>
