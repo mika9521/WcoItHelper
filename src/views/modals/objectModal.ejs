@@ -13,3 +13,46 @@
     </div>
   </div>
 </div>
+
+<div class="modal fade" id="softDeleteConfirmModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Potwierdź blokadę konta</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">Wykonasz <strong>soft delete</strong> dla konta:</p>
+        <div class="small text-break text-muted mb-3" id="softDeleteTargetDn">-</div>
+        <ul class="mb-0">
+          <li>konto zostanie wyłączone,</li>
+          <li>konto zostanie przeniesione do OU:</li>
+        </ul>
+        <div class="small text-break mt-2">
+          <code>OU=zablokowane_konta,DC=eskulap,DC=local</code>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+        <button type="button" class="btn btn-danger" id="confirmSoftDeleteBtn">Potwierdź blokadę</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="softDeleteSuccessModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Konto zostało usunięte (soft delete)</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        Konto zostało zablokowane i przeniesione do OU <code>zablokowane_konta</code>.
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" data-bs-dismiss="modal">OK</button>
+      </div>
+    </div>
+  </div>
+</div>

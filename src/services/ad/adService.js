@@ -1,4 +1,5 @@
 const env = require('../../config/env');
+const { Change, Attribute } = require('ldapts');
 const { AppError } = require('../../utils/errors');
 const { withServiceBind, withUserBind } = require('./adClient');
 const { normalizeObject } = require('./adMapper');
@@ -7,6 +8,18 @@ const DEFAULT_ATTRS = [
   'cn', 'displayName', 'sAMAccountName', 'userPrincipalName', 'mail', 'department', 'title',
   'whenCreated', 'lastLogonTimestamp', 'lastLogon', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName', 'userAccountControl', 'name', 'ou'
 ];
+const BLOCKED_ACCOUNTS_OU_DN = 'OU=zablokowane_konta,DC=eskulap,DC=local';
+
+function toChange(operation, attribute, values) {
+  const list = Array.isArray(values) ? values : [values];
+  return new Change({
+    operation,
+    modification: new Attribute({
+      type: attribute,
+      values: list
+    })
+  });
+}
 
 function buildUpn(login) {
   if (login.includes('@')) return login;
@@ -110,10 +123,10 @@ async function getObjectDetails(dn) {
 async function updateUserGroups(userDn, addDns = [], removeDns = []) {
   return withServiceBind(async (client) => {
     for (const groupDn of addDns) {
-      await client.modify(groupDn, [{ operation: 'add', modification: { member: userDn } }]);
+      await client.modify(groupDn, toChange('add', 'member', userDn));
     }
     for (const groupDn of removeDns) {
-      await client.modify(groupDn, [{ operation: 'delete', modification: { member: userDn } }]);
+      await client.modify(groupDn, toChange('delete', 'member', userDn));
     }
   });
 }
@@ -167,7 +180,7 @@ async function createUser(payload) {
       description
     });
 
-    await client.modify(dn, [{ operation: 'replace', modification: { unicodePwd: encodePassword(password) } }]);
+    await client.modify(dn, toChange('replace', 'unicodePwd', encodePassword(password)));
     const UAC = {
       NORMAL_ACCOUNT: 0x0200,
       ACCOUNTDISABLE: 0x0002,
@@ -179,18 +192,18 @@ async function createUser(payload) {
     if (Boolean(userCannotChangePassword)) userAccountControl |= UAC.PASSWD_CANT_CHANGE;
     if (Boolean(passwordNeverExpires)) userAccountControl |= UAC.DONT_EXPIRE_PASSWORD;
 
-    await client.modify(dn, [{ operation: 'replace', modification: { userAccountControl: String(userAccountControl) } }]);
+    await client.modify(dn, toChange('replace', 'userAccountControl', String(userAccountControl)));
 
     if (Boolean(mustChangePasswordAtNextLogon)) {
-      await client.modify(dn, [{ operation: 'replace', modification: { pwdLastSet: '0' } }]);
+      await client.modify(dn, toChange('replace', 'pwdLastSet', '0'));
     }
 
     if (accountExpiresMode === 'date' && accountExpiresDate) {
       const fileTime = toWindowsFileTime(accountExpiresDate, true);
       if (!fileTime) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
-      await client.modify(dn, [{ operation: 'replace', modification: { accountExpires: fileTime } }]);
+      await client.modify(dn, toChange('replace', 'accountExpires', fileTime));
     } else {
-      await client.modify(dn, [{ operation: 'replace', modification: { accountExpires: '0' } }]);
+      await client.modify(dn, toChange('replace', 'accountExpires', '0'));
     }
 
     return { dn, login };
@@ -223,8 +236,27 @@ async function setAccountEnabled(objectDn, enabled) {
     const DISABLED_FLAG = 2;
     const next = enabled ? (current & ~DISABLED_FLAG) : (current | DISABLED_FLAG);
 
-    await client.modify(objectDn, [{ operation: 'replace', modification: { userAccountControl: String(next) } }]);
+    await client.modify(objectDn, toChange('replace', 'userAccountControl', String(next)));
     return { updated: true, enabled };
+  });
+}
+
+async function softDeleteAccount(objectDn) {
+  return withServiceBind(async (client) => {
+    const { searchEntries } = await client.search(objectDn, {
+      scope: 'base',
+      attributes: ['userAccountControl']
+    });
+    if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
+
+    const current = Number(searchEntries[0].userAccountControl || 512);
+    const next = current | 0x0002;
+    await client.modify(objectDn, toChange('replace', 'userAccountControl', String(next)));
+
+    const rdn = objectDn.split(',')[0];
+    await client.modifyDN(objectDn, rdn, true, BLOCKED_ACCOUNTS_OU_DN);
+
+    return { updated: true, movedTo: BLOCKED_ACCOUNTS_OU_DN };
   });
 }
 
@@ -278,30 +310,30 @@ async function updateUserSettings(objectDn, payload = {}) {
     setFlag(Boolean(smartcardRequired), UAC.SMARTCARD_REQUIRED);
 
     const modifications = [
-      { operation: 'replace', modification: { userAccountControl: String(nextUac) } },
-      { operation: 'replace', modification: { mail: mail || [] } },
-      { operation: 'replace', modification: { profilePath: profilePath || [] } },
-      { operation: 'replace', modification: { scriptPath: scriptPath || [] } },
-      { operation: 'replace', modification: { homeDirectory: homeDirectory || [] } },
-      { operation: 'replace', modification: { homeDrive: homeDrive || [] } }
+      toChange('replace', 'userAccountControl', String(nextUac)),
+      toChange('replace', 'mail', mail || []),
+      toChange('replace', 'profilePath', profilePath || []),
+      toChange('replace', 'scriptPath', scriptPath || []),
+      toChange('replace', 'homeDirectory', homeDirectory || []),
+      toChange('replace', 'homeDrive', homeDrive || [])
     ];
 
     if (mustChangePasswordAtNextLogon === true) {
-      modifications.push({ operation: 'replace', modification: { pwdLastSet: '0' } });
+      modifications.push(toChange('replace', 'pwdLastSet', '0'));
     } else if (mustChangePasswordAtNextLogon === false) {
-      modifications.push({ operation: 'replace', modification: { pwdLastSet: '-1' } });
+      modifications.push(toChange('replace', 'pwdLastSet', '-1'));
     }
 
     if (accountExpiresMode === 'date' && accountExpiresDate) {
       const fileTime = toWindowsFileTime(accountExpiresDate, true);
       if (!fileTime) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
-      modifications.push({ operation: 'replace', modification: { accountExpires: fileTime } });
+      modifications.push(toChange('replace', 'accountExpires', fileTime));
     } else if (accountExpiresMode === 'never') {
-      modifications.push({ operation: 'replace', modification: { accountExpires: '0' } });
+      modifications.push(toChange('replace', 'accountExpires', '0'));
     }
 
     for (const mod of modifications) {
-      await client.modify(objectDn, [mod]);
+      await client.modify(objectDn, mod);
     }
 
     return { updated: true };
@@ -374,6 +406,7 @@ module.exports = {
   createUser,
   createGroup,
   setAccountEnabled,
+  softDeleteAccount,
   updateUserSettings,
   listOuChildren,
   getDashboardStats
