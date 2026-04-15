@@ -19,7 +19,8 @@ const {
   logEvent,
   readEvents,
   getObjectEvents,
-  getRecentLoginEvents
+  getRecentLoginEvents,
+  queryEvents
 } = require('../services/audit/auditLogService');
 
 const router = express.Router();
@@ -382,6 +383,23 @@ router.get('/api/audit/login-history', async (req, res) => {
     const limit = Math.min(Number(req.query.limit || 100), 1000);
     const rows = await getRecentLoginEvents(limit);
     res.json(rows);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/api/reports/portal-activity', async (req, res) => {
+  try {
+    const report = await queryEvents({
+      q: req.query.q || '',
+      action: req.query.action || '',
+      status: req.query.status || '',
+      from: req.query.from || '',
+      to: req.query.to || '',
+      page: Number(req.query.page || 1),
+      pageSize: Number(req.query.pageSize || 20)
+    });
+    res.json(report);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

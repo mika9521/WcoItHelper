@@ -87,9 +87,72 @@ async function getRecentLoginEvents(limit = 100) {
     .slice(0, limit);
 }
 
+function inDateRange(timestamp, fromDate, toDate) {
+  const value = new Date(timestamp);
+  if (Number.isNaN(value.getTime())) return false;
+  if (fromDate && value < fromDate) return false;
+  if (toDate && value > toDate) return false;
+  return true;
+}
+
+async function queryEvents(options = {}) {
+  const {
+    q = '',
+    action = '',
+    status = '',
+    from = '',
+    to = '',
+    page = 1,
+    pageSize = 20
+  } = options;
+
+  const allEvents = await readEvents(100000);
+  const qNorm = safeString(q).toLowerCase().trim();
+  const actionNorm = safeString(action).toLowerCase().trim();
+  const statusNorm = safeString(status).toLowerCase().trim();
+  const fromDate = from ? new Date(`${from}T00:00:00.000Z`) : null;
+  const toDate = to ? new Date(`${to}T23:59:59.999Z`) : null;
+
+  const filtered = allEvents.filter((event) => {
+    if (actionNorm && safeString(event.action).toLowerCase() !== actionNorm) return false;
+    if (statusNorm && safeString(event.status).toLowerCase() !== statusNorm) return false;
+    if ((fromDate || toDate) && !inDateRange(event.timestamp, fromDate, toDate)) return false;
+
+    if (!qNorm) return true;
+    const haystack = [
+      event.actorLogin,
+      event.actorDisplayName,
+      event.action,
+      event.status,
+      event.message,
+      event.scopeDn,
+      event.targetDn
+    ].map((x) => safeString(x).toLowerCase()).join(' ');
+    return haystack.includes(qNorm);
+  });
+
+  const safePageSize = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
+  const safePage = Math.max(Number(page) || 1, 1);
+  const total = filtered.length;
+  const totalPages = Math.max(Math.ceil(total / safePageSize), 1);
+  const start = (safePage - 1) * safePageSize;
+  const rows = filtered.slice(start, start + safePageSize);
+
+  return {
+    rows,
+    pagination: {
+      page: safePage,
+      pageSize: safePageSize,
+      total,
+      totalPages
+    }
+  };
+}
+
 module.exports = {
   logEvent,
   readEvents,
   getObjectEvents,
-  getRecentLoginEvents
+  getRecentLoginEvents,
+  queryEvents
 };

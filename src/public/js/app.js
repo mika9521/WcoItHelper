@@ -9,6 +9,7 @@ const objectBody = document.getElementById('objectBody');
 const objectTitle = document.getElementById('objectTitle');
 const loadReportBtn = document.getElementById('loadReportBtn');
 const reportResult = document.getElementById('reportResult');
+const reportsList = document.getElementById('reportsList');
 const statUsers = document.getElementById('statUsers');
 const statActiveUsers = document.getElementById('statActiveUsers');
 const statActiveUsersWithoutBlockedOu = document.getElementById('statActiveUsersWithoutBlockedOu');
@@ -18,6 +19,13 @@ const statOus = document.getElementById('statOus');
 const statTotal = document.getElementById('statTotal');
 const auditRecentList = document.getElementById('auditRecentList');
 const loginHistoryList = document.getElementById('loginHistoryList');
+const portalActivityFilterForm = document.getElementById('portalActivityFilterForm');
+const portalActivityList = document.getElementById('portalActivityList');
+const portalActivityPrev = document.getElementById('portalActivityPrev');
+const portalActivityNext = document.getElementById('portalActivityNext');
+const portalActivityPaginationInfo = document.getElementById('portalActivityPaginationInfo');
+const portalActivityAction = document.getElementById('portalActivityAction');
+const BLOCKED_ACCOUNTS_OU_DN = 'ou=zablokowane_konta,dc=eskulap,dc=local';
 
 const toast = new bootstrap.Toast(document.getElementById('appToast'));
 const objectModal = new bootstrap.Modal(document.getElementById('objectModal'));
@@ -39,7 +47,9 @@ const state = {
   softDeleteTargetDn: null,
   currentObjectDn: null,
   pendingChanges: null,
-  ouTreeCache: new Map()
+  ouTreeCache: new Map(),
+  activeReportPage: 'stale-logons',
+  portalActivityPage: 1
 };
 
 function showToast(message, isError = false) {
@@ -102,6 +112,11 @@ function isAccountDisabled(item) {
   return (flag & 2) === 2;
 }
 
+function isInBlockedOu(item) {
+  const dn = String(item?.dn || item?.distinguishedName || '').toLowerCase();
+  return dn.includes(BLOCKED_ACCOUNTS_OU_DN);
+}
+
 function formatAdDate(raw) {
   if (!raw) return '-';
   const s = String(raw);
@@ -148,7 +163,12 @@ function renderResultItem(item) {
   const dn = item.dn || item.distinguishedName;
   const name = getDisplayName(item);
   const disabled = isAccountDisabled(item);
-  if (disabled) tr.classList.add('table-warning');
+  const inBlockedOu = isInBlockedOu(item);
+  if (disabled && inBlockedOu) {
+    tr.classList.add('table-danger');
+  } else if (disabled) {
+    tr.classList.add('table-warning');
+  }
 
   const openDetails = () => {
     document.querySelectorAll('#results tr.result-active').forEach((row) => row.classList.remove('result-active'));
@@ -420,24 +440,78 @@ async function loadObjectAuditLogs(objectDn) {
 
 async function loadGlobalAuditWidgets() {
   try {
-    const [recentRows, loginRows] = await Promise.all([
-      api('/api/audit/recent?limit=30'),
-      api('/api/audit/login-history?limit=30')
-    ]);
-
-    if (auditRecentList) {
-      auditRecentList.innerHTML = recentRows.length
-        ? recentRows.map((event) => formatAuditEventLine(event)).join('')
-        : '<div class="text-muted">Brak zdarzeń.</div>';
-    }
+    const loginRows = await api('/api/audit/login-history?limit=30');
     if (loginHistoryList) {
       loginHistoryList.innerHTML = loginRows.length
         ? loginRows.map((event) => formatAuditEventLine(event)).join('')
         : '<div class="text-muted">Brak logowań.</div>';
     }
   } catch (error) {
-    if (auditRecentList) auditRecentList.innerHTML = `<div class="text-danger">${escapeHtml(error.message)}</div>`;
     if (loginHistoryList) loginHistoryList.innerHTML = `<div class="text-danger">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function switchReportPage(reportId) {
+  state.activeReportPage = reportId;
+  document.querySelectorAll('.report-page').forEach((page) => {
+    page.classList.toggle('d-none', page.dataset.reportPage !== reportId);
+  });
+  document.querySelectorAll('.report-link').forEach((link) => {
+    link.classList.toggle('active', link.dataset.report === reportId);
+  });
+}
+
+async function loadPortalActivityReport(page = 1) {
+  if (!portalActivityList) return;
+  try {
+    state.portalActivityPage = Math.max(page, 1);
+    const q = document.getElementById('portalActivitySearch')?.value || '';
+    const from = document.getElementById('portalActivityFrom')?.value || '';
+    const to = document.getElementById('portalActivityTo')?.value || '';
+    const action = portalActivityAction?.value || '';
+    const status = document.getElementById('portalActivityStatus')?.value || '';
+    const pageSize = Number(document.getElementById('portalActivityPageSize')?.value || 20);
+    const params = new URLSearchParams({
+      q,
+      from,
+      to,
+      action,
+      status,
+      page: String(state.portalActivityPage),
+      pageSize: String(pageSize)
+    });
+    const data = await api(`/api/reports/portal-activity?${params.toString()}`);
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+    portalActivityList.innerHTML = rows.length
+      ? rows.map((event) => formatAuditEventLine(event)).join('')
+      : '<div class="text-muted">Brak zdarzeń dla podanych filtrów.</div>';
+
+    const pagination = data.pagination || {};
+    const totalPages = Number(pagination.totalPages || 1);
+    const currentPage = Number(pagination.page || 1);
+    if (portalActivityPaginationInfo) {
+      portalActivityPaginationInfo.textContent = `Strona ${currentPage}/${totalPages} · Rekordy: ${pagination.total || 0}`;
+    }
+    if (portalActivityPrev) portalActivityPrev.disabled = currentPage <= 1;
+    if (portalActivityNext) portalActivityNext.disabled = currentPage >= totalPages;
+  } catch (error) {
+    portalActivityList.innerHTML = `<div class="text-danger">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function initPortalActivityActions() {
+  if (!portalActivityAction) return;
+  try {
+    const rows = await api('/api/audit/recent?limit=500');
+    const actions = [...new Set((rows || []).map((row) => row.action).filter(Boolean))];
+    actions.forEach((name) => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      portalActivityAction.appendChild(option);
+    });
+  } catch {
+    // ignorujemy; formularz nadal działa bez listy akcji
   }
 }
 
@@ -786,6 +860,33 @@ searchInput.addEventListener('keydown', (event) => {
     runSearch();
   }
 });
+
+reportsList?.addEventListener('click', (event) => {
+  const button = event.target.closest('.report-link');
+  if (!button) return;
+  switchReportPage(button.dataset.report);
+  if (button.dataset.report === 'portal-activity') {
+    loadPortalActivityReport(1);
+  }
+  if (button.dataset.report === 'login-history') {
+    loadGlobalAuditWidgets();
+  }
+});
+
+portalActivityFilterForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  await loadPortalActivityReport(1);
+});
+
+portalActivityPrev?.addEventListener('click', () => {
+  if (state.portalActivityPage <= 1) return;
+  loadPortalActivityReport(state.portalActivityPage - 1);
+});
+
+portalActivityNext?.addEventListener('click', () => {
+  loadPortalActivityReport(state.portalActivityPage + 1);
+});
+
 loadReportBtn.addEventListener('click', async () => {
   try {
     const years = Number(document.getElementById('reportYears').value || 2);
@@ -903,3 +1004,5 @@ function cssEscapeValue(value) {
 bindOuPickers();
 loadDashboardStats();
 loadGlobalAuditWidgets();
+initPortalActivityActions();
+switchReportPage(state.activeReportPage);
