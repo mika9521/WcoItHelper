@@ -14,6 +14,8 @@ const statGroups = document.getElementById('statGroups');
 const statComputers = document.getElementById('statComputers');
 const statOus = document.getElementById('statOus');
 const statTotal = document.getElementById('statTotal');
+const auditRecentList = document.getElementById('auditRecentList');
+const loginHistoryList = document.getElementById('loginHistoryList');
 
 const toast = new bootstrap.Toast(document.getElementById('appToast'));
 const objectModal = new bootstrap.Modal(document.getElementById('objectModal'));
@@ -344,6 +346,7 @@ function userTemplate(data) {
     { id: 'u-data', title: 'Dane', content: dataTableTemplate(data) },
     { id: 'u-settings', title: 'Ustawienia', content: userSettingsTemplate(data) },
     { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'u-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'user') },
     { id: 'u-dev', title: 'DEV', content: devTemplate(data) }
   ]);
 }
@@ -352,6 +355,7 @@ function computerTemplate(data) {
   return tabsTemplate([
     { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) },
     { id: 'c-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'c-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'computer') },
     { id: 'c-dev', title: 'DEV', content: devTemplate(data) }
   ]);
 }
@@ -360,6 +364,7 @@ function groupTemplate(data) {
   return tabsTemplate([
     { id: 'g-data', title: 'Dane', content: dataTableTemplate(data) },
     { id: 'g-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'g-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'group') },
     { id: 'g-dev', title: 'DEV', content: devTemplate(data) }
   ]);
 }
@@ -367,8 +372,71 @@ function groupTemplate(data) {
 function ouTemplate(data) {
   return tabsTemplate([
     { id: 'o-data', title: 'Dane obiektu', content: dataTableTemplate(data) },
+    { id: 'o-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'ou') },
     { id: 'o-dev', title: 'DEV', content: devTemplate(data) }
   ]);
+}
+
+function auditLogsTemplate(dn, type) {
+  return `
+    <div class="small text-muted mb-2">Historia zmian i działań z portalu dla obiektu typu ${escapeHtml(type)}.</div>
+    <div class="audit-object-logs" data-dn="${escapeHtml(dn || '')}">Ładowanie logów…</div>
+  `;
+}
+
+function formatAuditEventLine(event) {
+  const timestamp = formatAdDate(event.timestamp);
+  const actor = event.actorDisplayName || event.actorLogin || 'nieznany';
+  const action = event.action || 'akcja';
+  const statusClass = event.status === 'success' ? 'text-bg-success' : 'text-bg-danger';
+  const message = event.message || '-';
+  return `
+    <div class="border rounded p-2 mb-2">
+      <div class="d-flex align-items-center justify-content-between mb-1">
+        <div><strong>${escapeHtml(actor)}</strong> <span class="text-muted">(${escapeHtml(event.actorLogin || '-')})</span></div>
+        <span class="badge ${statusClass}">${escapeHtml(event.status || '-')}</span>
+      </div>
+      <div class="small"><code>${escapeHtml(action)}</code> · ${escapeHtml(timestamp)}</div>
+      <div class="small mt-1">${escapeHtml(message)}</div>
+      <div class="small text-muted mt-1">${escapeHtml(event.scopeDn || event.targetDn || '')}</div>
+    </div>
+  `;
+}
+
+async function loadObjectAuditLogs(objectDn) {
+  const holder = document.querySelector('.audit-object-logs');
+  if (!holder || !objectDn) return;
+  try {
+    const rows = await api(`/api/audit/object-logs?dn=${encodeURIComponent(objectDn)}&limit=200`);
+    holder.innerHTML = rows.length
+      ? rows.map((event) => formatAuditEventLine(event)).join('')
+      : '<div class="text-muted small">Brak logów dla tego obiektu.</div>';
+  } catch (error) {
+    holder.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function loadGlobalAuditWidgets() {
+  try {
+    const [recentRows, loginRows] = await Promise.all([
+      api('/api/audit/recent?limit=30'),
+      api('/api/audit/login-history?limit=30')
+    ]);
+
+    if (auditRecentList) {
+      auditRecentList.innerHTML = recentRows.length
+        ? recentRows.map((event) => formatAuditEventLine(event)).join('')
+        : '<div class="text-muted">Brak zdarzeń.</div>';
+    }
+    if (loginHistoryList) {
+      loginHistoryList.innerHTML = loginRows.length
+        ? loginRows.map((event) => formatAuditEventLine(event)).join('')
+        : '<div class="text-muted">Brak logowań.</div>';
+    }
+  } catch (error) {
+    if (auditRecentList) auditRecentList.innerHTML = `<div class="text-danger">${escapeHtml(error.message)}</div>`;
+    if (loginHistoryList) loginHistoryList.innerHTML = `<div class="text-danger">${escapeHtml(error.message)}</div>`;
+  }
 }
 
 function renderPendingMemberLine(groupDn, pendingAdd = false) {
@@ -404,6 +472,7 @@ async function openObject(dn, typeHint) {
     state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
     applyObjectChangesBtn.classList.remove('d-none');
     bindModalActions();
+    await loadObjectAuditLogs(state.currentObjectDn);
     objectModal.show();
   } catch (error) {
     showToast(error.message, true);
@@ -829,3 +898,4 @@ function cssEscapeValue(value) {
 
 bindOuPickers();
 loadDashboardStats();
+loadGlobalAuditWidgets();
