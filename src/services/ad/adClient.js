@@ -109,4 +109,19 @@ async function withUserBind(userPrincipalName, password, action) {
   }
 }
 
-module.exports = { withServiceBind, withUserBind };
+async function withAdaptiveBind(authContext, action) {
+  const shouldUseLoggedUser = env.ad.useLoggedUserBind === true;
+  const userPrincipalName = authContext?.userPrincipalName;
+  const password = authContext?.password;
+
+  if (shouldUseLoggedUser) {
+    if (!userPrincipalName || !password) {
+      throw new Error('Brak poświadczeń zalogowanego użytkownika do operacji AD');
+    }
+    return withUserBind(userPrincipalName, password, action);
+  }
+
+  return withServiceBind(action);
+}
+
+module.exports = { withServiceBind, withUserBind, withAdaptiveBind };

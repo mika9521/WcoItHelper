@@ -24,6 +24,10 @@ const {
 
 const router = express.Router();
 
+function adAuthFromRequest(req) {
+  return req.session?.user?.adAuth || null;
+}
+
 function actorFromRequest(req) {
   return {
     actorLogin: req.session?.user?.login || '',
@@ -44,9 +48,10 @@ async function audit(req, payload = {}) {
 router.get('/api/search', async (req, res) => {
   try {
     const { q = '', type = 'all', ouDn = '' } = req.query;
+    const adAuth = adAuthFromRequest(req);
     const results = ouDn
-      ? await searchObjectsInOu(ouDn, type)
-      : await searchObjects(q, type);
+      ? await searchObjectsInOu(ouDn, type, adAuth)
+      : await searchObjects(q, type, adAuth);
     await audit(req, {
       action: 'search',
       status: 'success',
@@ -70,7 +75,7 @@ router.get('/api/search', async (req, res) => {
 router.get('/api/object', async (req, res) => {
   try {
     const objectDn = req.query.dn;
-    const details = await getObjectDetails(objectDn);
+    const details = await getObjectDetails(objectDn, adAuthFromRequest(req));
     await audit(req, {
       action: 'object_view',
       status: 'success',
@@ -92,7 +97,7 @@ router.get('/api/object', async (req, res) => {
 router.post('/api/user/groups', async (req, res) => {
   try {
     const { userDn, addDns = [], removeDns = [] } = req.body;
-    await updateUserGroups(userDn, addDns, removeDns);
+    await updateUserGroups(userDn, addDns, removeDns, adAuthFromRequest(req));
     await audit(req, {
       action: 'user_groups_update',
       status: 'success',
@@ -120,7 +125,8 @@ router.post('/api/user/groups/copy', async (req, res) => {
     const result = await copyGroupsFromReference(
       targetUserDn,
       referenceUserDn,
-      selectedGroups || []
+      selectedGroups || [],
+      adAuthFromRequest(req)
     );
     await audit(req, {
       action: 'user_groups_copy',
@@ -147,7 +153,7 @@ router.post('/api/user/groups/copy', async (req, res) => {
 router.post('/api/object/move', async (req, res) => {
   try {
     const { objectDn, newParentOuDn } = req.body;
-    const result = await moveObject(objectDn, newParentOuDn);
+    const result = await moveObject(objectDn, newParentOuDn, adAuthFromRequest(req));
     await audit(req, {
       action: 'object_move',
       status: 'success',
@@ -172,7 +178,7 @@ router.post('/api/object/move', async (req, res) => {
 router.post('/api/object/enabled', async (req, res) => {
   try {
     const { objectDn, enabled } = req.body;
-    const result = await setAccountEnabled(objectDn, Boolean(enabled));
+    const result = await setAccountEnabled(objectDn, Boolean(enabled), adAuthFromRequest(req));
     await audit(req, {
       action: 'account_enabled_toggle',
       status: 'success',
@@ -195,7 +201,7 @@ router.post('/api/object/enabled', async (req, res) => {
 router.post('/api/object/soft-delete', async (req, res) => {
   try {
     const { objectDn } = req.body;
-    const result = await softDeleteAccount(objectDn);
+    const result = await softDeleteAccount(objectDn, adAuthFromRequest(req));
     await audit(req, {
       action: 'account_soft_delete',
       status: 'success',
@@ -217,7 +223,7 @@ router.post('/api/object/soft-delete', async (req, res) => {
 router.post('/api/user/settings', async (req, res) => {
   try {
     const { objectDn, ...payload } = req.body;
-    const result = await updateUserSettings(objectDn, payload);
+    const result = await updateUserSettings(objectDn, payload, adAuthFromRequest(req));
     await audit(req, {
       action: 'user_settings_update',
       status: 'success',
@@ -242,7 +248,7 @@ router.post('/api/user/settings', async (req, res) => {
 
 router.post('/api/group/create', async (req, res) => {
   try {
-    const result = await createGroup(req.body);
+    const result = await createGroup(req.body, adAuthFromRequest(req));
     await audit(req, {
       action: 'group_create',
       status: 'success',
@@ -266,7 +272,7 @@ router.post('/api/group/create', async (req, res) => {
 router.get('/api/ou-children', async (req, res) => {
   try {
     const { parentDn, ouOnly } = req.query;
-    const data = await listOuChildren(parentDn || undefined, ouOnly === '1');
+    const data = await listOuChildren(parentDn || undefined, ouOnly === '1', adAuthFromRequest(req));
     await audit(req, {
       action: 'ou_children_list',
       status: 'success',
@@ -288,7 +294,7 @@ router.get('/api/ou-children', async (req, res) => {
 
 router.get('/api/dashboard/stats', async (req, res) => {
   try {
-    const data = await getDashboardStats();
+    const data = await getDashboardStats(adAuthFromRequest(req));
     await audit(req, {
       action: 'dashboard_stats',
       status: 'success',
@@ -307,7 +313,7 @@ router.get('/api/dashboard/stats', async (req, res) => {
 
 router.post('/api/user/create', async (req, res) => {
   try {
-    const result = await createUser(req.body);
+    const result = await createUser(req.body, adAuthFromRequest(req));
     await audit(req, {
       action: 'user_create',
       status: 'success',
@@ -331,7 +337,7 @@ router.post('/api/user/create', async (req, res) => {
 router.get('/api/reports/stale-logons', async (req, res) => {
   try {
     const years = Number(req.query.years || 2);
-    const report = await staleLogons(years);
+    const report = await staleLogons(years, adAuthFromRequest(req));
     await audit(req, {
       action: 'report_stale_logons',
       status: 'success',

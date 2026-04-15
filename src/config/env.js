@@ -36,6 +36,7 @@ module.exports = {
     baseDn: process.env.AD_BASE_DN,
     bindDn: process.env.AD_BIND_DN,
     bindPassword: process.env.AD_BIND_PASSWORD,
+    useLoggedUserBind: parseBoolean(process.env.AD_USE_LOGGED_USER_BIND, false),
     allowedGroupDn: process.env.AD_ALLOWED_GROUP_DN,
     allowedUsers: (process.env.AD_ALLOWED_USERS || '')
       .split(',')
