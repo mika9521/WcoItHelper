@@ -21,6 +21,8 @@ const groupSearchModal = new bootstrap.Modal(document.getElementById('groupSearc
 const referenceUserModal = new bootstrap.Modal(document.getElementById('referenceUserModal'));
 const copyGroupsModal = new bootstrap.Modal(document.getElementById('copyGroupsModal'));
 const ouPickerModal = new bootstrap.Modal(document.getElementById('ouPickerModal'));
+const softDeleteConfirmModal = new bootstrap.Modal(document.getElementById('softDeleteConfirmModal'));
+const softDeleteSuccessModal = new bootstrap.Modal(document.getElementById('softDeleteSuccessModal'));
 const applyObjectChangesBtn = document.getElementById('applyObjectChangesBtn');
 
 const state = {
@@ -30,6 +32,7 @@ const state = {
   selectedOuInputId: null,
   selectedOuOuOnly: true,
   selectedOuDn: null,
+  softDeleteTargetDn: null,
   currentObjectDn: null,
   pendingChanges: null,
   ouTreeCache: new Map()
@@ -166,7 +169,7 @@ function renderResultItem(item) {
   tr.querySelector('.object-link').addEventListener('click', openDetails);
   tr.querySelector('.action-open').addEventListener('click', openDetails);
   tr.querySelector('.action-move').addEventListener('click', () => openMoveOnly(dn, getDisplayName(item) || dn));
-  tr.querySelector('.action-toggle')?.addEventListener('click', () => toggleUser(dn));
+  tr.querySelector('.action-toggle')?.addEventListener('click', () => openSoftDeleteModal(item));
   return tr;
 }
 
@@ -417,13 +420,16 @@ function openMoveOnly(dn, label) {
   objectModal.show();
 }
 
-async function toggleUser(userDn) {
-  try {
-    await api('/api/object/enabled', { method: 'POST', body: JSON.stringify({ objectDn: userDn, enabled: false }) });
-    showToast('Obiekt został wyłączony/zablokowany');
-  } catch (error) {
-    showToast(error.message, true);
+function openSoftDeleteModal(item) {
+  const dn = item?.dn || item?.distinguishedName;
+  if (!dn) {
+    showToast('Brak DN obiektu do zablokowania', true);
+    return;
   }
+  state.softDeleteTargetDn = dn;
+  const target = document.getElementById('softDeleteTargetDn');
+  if (target) target.textContent = dn;
+  softDeleteConfirmModal.show();
 }
 
 function renderLookupItem(container, item, onPick) {
@@ -598,6 +604,22 @@ document.getElementById('confirmOuBtn').addEventListener('click', () => {
   document.getElementById(state.selectedOuInputId).value = state.selectedOuDn;
   state.pendingChanges.moveTargetDn = state.selectedOuDn;
   ouPickerModal.hide();
+});
+
+document.getElementById('confirmSoftDeleteBtn')?.addEventListener('click', async () => {
+  if (!state.softDeleteTargetDn) return;
+  try {
+    await api('/api/object/soft-delete', {
+      method: 'POST',
+      body: JSON.stringify({ objectDn: state.softDeleteTargetDn })
+    });
+    softDeleteConfirmModal.hide();
+    softDeleteSuccessModal.show();
+    showToast('Konto zablokowane i przeniesione do OU zablokowane_konta');
+    await runSearch();
+  } catch (error) {
+    showToast(error.message, true);
+  }
 });
 
 document.getElementById('groupLookupInput').addEventListener('input', async (event) => {
