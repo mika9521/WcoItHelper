@@ -7,8 +7,8 @@ function fileTimeToDate(fileTime) {
   return new Date(ms);
 }
 
-async function staleLogons(years = 2) {
-  const users = await searchObjects('', 'user');
+async function staleLogons(years = 2, authContext = null) {
+  const users = await searchObjects('', 'user', authContext);
   const threshold = new Date();
   threshold.setFullYear(threshold.getFullYear() - years);
 

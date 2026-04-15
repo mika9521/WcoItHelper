@@ -60,3 +60,6 @@ Dodatkowo:
   - Dla `ldap://` działa jako **StartTLS**.
   - Dla `ldaps://` szyfrowanie jest zapewniane przez sam protokół.
 - `AD_TLS_REJECT_UNAUTHORIZED=true|false` – walidacja certyfikatu TLS.
+- `AD_USE_LOGGED_USER_BIND=true|false` – wybór kontekstu uprawnień dla operacji AD:
+  - `false` (domyślnie): operacje wykonywane kontem serwisowym (`AD_BIND_DN`),
+  - `true`: operacje wykonywane poświadczeniami aktualnie zalogowanego użytkownika.

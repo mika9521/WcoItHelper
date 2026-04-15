@@ -1,7 +1,7 @@
 const env = require('../../config/env');
 const { Change, Attribute } = require('ldapts');
 const { AppError } = require('../../utils/errors');
-const { withServiceBind, withUserBind } = require('./adClient');
+const { withUserBind, withAdaptiveBind } = require('./adClient');
 const { normalizeObject } = require('./adMapper');
 
 const DEFAULT_ATTRS = [
@@ -33,7 +33,10 @@ async function authenticate(login, password) {
   const userPrincipalName = buildUpn(login);
 
   return withUserBind(userPrincipalName, password, async () => {
-    const identity = await getUserByLogin(login);
+    const identity = await getUserByLogin(login, {
+      userPrincipalName,
+      password
+    });
     if (!identity) {
       throw new AppError('Nie znaleziono użytkownika w AD', 401);
     }
@@ -49,13 +52,14 @@ async function authenticate(login, password) {
       login: identity.sAMAccountName,
       displayName: identity.displayName || identity.cn,
       dn: identity.dn,
+      userPrincipalName,
       memberOf: identity.memberOf
     };
   });
 }
 
-async function getUserByLogin(login) {
-  return withServiceBind(async (client) => {
+async function getUserByLogin(login, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(env.ad.baseDn, {
       scope: 'sub',
       filter: `(&(objectClass=user)(sAMAccountName=${escapeFilter(login)}))`,
@@ -65,7 +69,7 @@ async function getUserByLogin(login) {
   });
 }
 
-async function searchObjects(query, type) {
+async function searchObjects(query, type, authContext = null) {
   const filters = {
     user: '(objectClass=user)',
     computer: '(objectClass=computer)',
@@ -76,7 +80,7 @@ async function searchObjects(query, type) {
   const typeFilter = filters[type] || filters.all;
   const term = escapeFilter(query);
 
-  return withServiceBind(async (client) => {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(env.ad.baseDn, {
       scope: 'sub',
       sizeLimit: 50,
@@ -88,7 +92,7 @@ async function searchObjects(query, type) {
   });
 }
 
-async function searchObjectsInOu(ouDn, type = 'all') {
+async function searchObjectsInOu(ouDn, type = 'all', authContext = null) {
   const filters = {
     user: '(objectClass=user)',
     computer: '(objectClass=computer)',
@@ -98,7 +102,7 @@ async function searchObjectsInOu(ouDn, type = 'all') {
   const typeFilter = filters[type] || filters.all;
   const baseDn = ouDn || env.ad.baseDn;
 
-  return withServiceBind(async (client) => {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(baseDn, {
       scope: 'sub',
       sizeLimit: 250,
@@ -109,8 +113,8 @@ async function searchObjectsInOu(ouDn, type = 'all') {
   });
 }
 
-async function getObjectDetails(dn) {
-  return withServiceBind(async (client) => {
+async function getObjectDetails(dn, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(dn, {
       scope: 'base',
       attributes: ['*', 'member', 'managedBy', 'pwdLastSet', 'userAccountControl']
@@ -120,8 +124,8 @@ async function getObjectDetails(dn) {
   });
 }
 
-async function updateUserGroups(userDn, addDns = [], removeDns = []) {
-  return withServiceBind(async (client) => {
+async function updateUserGroups(userDn, addDns = [], removeDns = [], authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     for (const groupDn of addDns) {
       await client.modify(groupDn, toChange('add', 'member', userDn));
     }
@@ -131,21 +135,21 @@ async function updateUserGroups(userDn, addDns = [], removeDns = []) {
   });
 }
 
-async function copyGroupsFromReference(targetUserDn, referenceUserDn, selectedGroups) {
+async function copyGroupsFromReference(targetUserDn, referenceUserDn, selectedGroups, authContext = null) {
   const groups = selectedGroups.filter(Boolean);
-  await updateUserGroups(targetUserDn, groups, []);
+  await updateUserGroups(targetUserDn, groups, [], authContext);
   return { targetUserDn, referenceUserDn, copied: groups.length };
 }
 
-async function moveObject(objectDn, newParentOuDn) {
-  return withServiceBind(async (client) => {
+async function moveObject(objectDn, newParentOuDn, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     const rdn = objectDn.split(',')[0];
     await client.modifyDN(objectDn, rdn, true, newParentOuDn);
     return { moved: true };
   });
 }
 
-async function createUser(payload) {
+async function createUser(payload, authContext = null) {
   const {
     ouDn,
     firstName,
@@ -168,7 +172,7 @@ async function createUser(payload) {
     .map((p) => p.replace(/^DC=/i, ''))
     .join('.');
 
-  return withServiceBind(async (client) => {
+  return withAdaptiveBind(authContext, async (client) => {
     await client.add(dn, {
       objectClass: ['top', 'person', 'organizationalPerson', 'user'],
       cn,
@@ -224,8 +228,8 @@ function escapeFilter(value = '') {
 }
 
 
-async function setAccountEnabled(objectDn, enabled) {
-  return withServiceBind(async (client) => {
+async function setAccountEnabled(objectDn, enabled, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(objectDn, {
       scope: 'base',
       attributes: ['userAccountControl', 'objectClass']
@@ -241,8 +245,8 @@ async function setAccountEnabled(objectDn, enabled) {
   });
 }
 
-async function softDeleteAccount(objectDn) {
-  return withServiceBind(async (client) => {
+async function softDeleteAccount(objectDn, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(objectDn, {
       scope: 'base',
       attributes: ['userAccountControl']
@@ -268,8 +272,8 @@ function toWindowsFileTime(dateValue, endOfDay = false) {
   return String(msSince1601 * 10000);
 }
 
-async function updateUserSettings(objectDn, payload = {}) {
-  return withServiceBind(async (client) => {
+async function updateUserSettings(objectDn, payload = {}, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(objectDn, {
       scope: 'base',
       attributes: ['userAccountControl']
@@ -340,11 +344,11 @@ async function updateUserSettings(objectDn, payload = {}) {
   });
 }
 
-async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false) {
+async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false, authContext = null) {
   const filter = onlyOu
     ? '(|(objectClass=organizationalUnit)(objectClass=container))'
     : '(|(objectClass=organizationalUnit)(objectClass=container)(objectClass=user)(objectClass=group)(objectClass=computer))';
-  return withServiceBind(async (client) => {
+  return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(parentDn, {
       scope: 'one',
       filter,
@@ -354,8 +358,8 @@ async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false) {
   });
 }
 
-async function getDashboardStats() {
-  return withServiceBind(async (client) => {
+async function getDashboardStats(authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
     const runCount = async (filter) => {
       const { searchEntries } = await client.search(env.ad.baseDn, {
         scope: 'sub',
@@ -367,22 +371,36 @@ async function getDashboardStats() {
       return searchEntries.length;
     };
 
-    const [users, groups, computers, ous] = await Promise.all([
+    const blockedOu = escapeFilter(BLOCKED_ACCOUNTS_OU_DN);
+    const activeUsersFilter = '(&(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))';
+    const activeUsersWithoutBlockedOuFilter = `(&${activeUsersFilter}(!(distinguishedName=*,${blockedOu})))`;
+
+    const [users, groups, computers, ous, activeUsers, activeUsersWithoutBlockedOu] = await Promise.all([
       runCount('(objectClass=user)'),
       runCount('(objectClass=group)'),
       runCount('(objectClass=computer)'),
-      runCount('(objectClass=organizationalUnit)')
+      runCount('(objectClass=organizationalUnit)'),
+      runCount(activeUsersFilter),
+      runCount(activeUsersWithoutBlockedOuFilter)
     ]);
 
-    return { users, groups, computers, ous, total: users + groups + computers };
+    return {
+      users,
+      groups,
+      computers,
+      ous,
+      activeUsers,
+      activeUsersWithoutBlockedOu,
+      total: users + groups + computers
+    };
   });
 }
 
-async function createGroup(payload) {
+async function createGroup(payload, authContext = null) {
   const { ouDn, name, samAccountName, description } = payload;
   const dn = `CN=${name},${ouDn}`;
 
-  return withServiceBind(async (client) => {
+  return withAdaptiveBind(authContext, async (client) => {
     await client.add(dn, {
       objectClass: ['top', 'group'],
       cn: name,

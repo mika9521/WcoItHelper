@@ -1,4 +1,5 @@
 const express = require('express');
+const env = require('../config/env');
 const { authenticate } = require('../services/ad/adService');
 const { logEvent } = require('../services/audit/auditLogService');
 
@@ -12,7 +13,15 @@ router.post('/login', async (req, res) => {
   try {
     const { login, password } = req.body;
     const user = await authenticate(login, password);
-    req.session.user = user;
+    req.session.user = {
+      ...user,
+      adAuth: env.ad.useLoggedUserBind
+        ? {
+            userPrincipalName: user.userPrincipalName,
+            password
+          }
+        : null
+    };
     await logEvent({
       action: 'login',
       status: 'success',

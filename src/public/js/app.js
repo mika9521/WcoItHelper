@@ -10,6 +10,8 @@ const objectTitle = document.getElementById('objectTitle');
 const loadReportBtn = document.getElementById('loadReportBtn');
 const reportResult = document.getElementById('reportResult');
 const statUsers = document.getElementById('statUsers');
+const statActiveUsers = document.getElementById('statActiveUsers');
+const statActiveUsersWithoutBlockedOu = document.getElementById('statActiveUsersWithoutBlockedOu');
 const statGroups = document.getElementById('statGroups');
 const statComputers = document.getElementById('statComputers');
 const statOus = document.getElementById('statOus');
@@ -799,6 +801,8 @@ async function loadDashboardStats() {
   try {
     const data = await api('/api/dashboard/stats');
     if (statUsers) statUsers.textContent = data.users;
+    if (statActiveUsers) statActiveUsers.textContent = data.activeUsers;
+    if (statActiveUsersWithoutBlockedOu) statActiveUsersWithoutBlockedOu.textContent = data.activeUsersWithoutBlockedOu;
     if (statGroups) statGroups.textContent = data.groups;
     if (statComputers) statComputers.textContent = data.computers;
     if (statOus) statOus.textContent = data.ous;
