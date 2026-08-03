@@ -109,8 +109,18 @@ main.container,
   margin-bottom: 1rem;
 }
 .app-sidebar-brand-icon {
-  font-size: 1.4rem;
   flex: 0 0 auto;
+  width: 2.1rem;
+  height: 2.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 .app-sidebar-brand-text {
   font-weight: 700;
@@ -151,11 +161,6 @@ main.container,
   color: #fff;
   box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.5);
 }
-.app-nav-icon {
-  font-size: 1.05rem;
-  flex: 0 0 auto;
-}
-
 .app-sidebar-user {
   margin-top: auto;
   padding-top: 1rem;
@@ -273,14 +278,10 @@ main.container,
 }
 .stat-icon {
   flex: 0 0 auto;
-  width: 2.6rem;
-  height: 2.6rem;
-  border-radius: 0.65rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.25rem;
-  background: var(--accent-soft);
+  width: 0.45rem;
+  height: 2.4rem;
+  border-radius: 0.25rem;
+  background: var(--accent);
 }
 .stat-card .h4 {
   font-weight: 700;
@@ -351,6 +352,25 @@ main.container,
 .btn:active {
   transform: translateY(1px);
 }
+
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  padding: 0 0.35rem;
+  border-radius: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--ink-500);
+}
+.type-badge-user { background: #2563eb; }
+.type-badge-computer { background: #475569; }
+.type-badge-group { background: var(--accent); }
+.type-badge-ou { background: #b45309; }
 
 .object-pill { cursor: pointer; }
 pre.json-view {

@@ -15,7 +15,11 @@ const {
   updateUserSettings,
   listOuChildren,
   getDashboardStats,
-  getBitlockerKeys
+  getBitlockerKeys,
+  isSamAccountNameTaken,
+  suggestLogin,
+  getUserCertificates,
+  revokeUserCertificate
 } = require('../services/ad/adService');
 const { staleLogons } = require('../services/reports/reportService');
 const {
@@ -345,6 +349,54 @@ router.get('/api/ou-children', async (req, res) => {
   }
 });
 
+router.get('/api/user/certificates', async (req, res) => {
+  try {
+    const dn = req.query.dn;
+    const rows = await getUserCertificates(dn, adAuthFromRequest(req));
+    await audit(req, {
+      action: 'user_certificates_view',
+      status: 'success',
+      scopeType: 'user',
+      scopeDn: dn || '',
+      message: 'Podgląd certyfikatów użytkownika',
+      details: { count: rows.length }
+    });
+    res.json(rows);
+  } catch (error) {
+    await audit(req, {
+      action: 'user_certificates_view',
+      status: 'error',
+      scopeDn: req.query?.dn || '',
+      message: error.message
+    });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.post('/api/user/certificates/revoke', async (req, res) => {
+  try {
+    const { userDn, certificateBase64, subjectCn } = req.body;
+    await revokeUserCertificate(userDn, certificateBase64, adAuthFromRequest(req));
+    await audit(req, {
+      action: 'user_certificate_revoke',
+      status: 'success',
+      scopeType: 'user',
+      scopeDn: userDn,
+      message: 'Odwołanie certyfikatu użytkownika',
+      details: { subjectCn: subjectCn || '' }
+    });
+    res.json({ updated: true });
+  } catch (error) {
+    await audit(req, {
+      action: 'user_certificate_revoke',
+      status: 'error',
+      scopeDn: req.body?.userDn || '',
+      message: error.message
+    });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
 router.get('/api/computer/bitlocker', async (req, res) => {
   try {
     const dn = req.query.dn;
@@ -384,6 +436,30 @@ router.get('/api/dashboard/stats', async (req, res) => {
       status: 'error',
       message: error.message
     });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.get('/api/user/suggest-login', async (req, res) => {
+  try {
+    const { firstName = '', lastName = '' } = req.query;
+    const result = await suggestLogin(firstName, lastName, adAuthFromRequest(req));
+    res.json(result);
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.get('/api/user/login-availability', async (req, res) => {
+  try {
+    const login = String(req.query.login || '');
+    if (!login) {
+      res.json({ available: false });
+      return;
+    }
+    const taken = await isSamAccountNameTaken(login, adAuthFromRequest(req));
+    res.json({ available: !taken });
+  } catch (error) {
     res.status(error.status || 500).json({ message: error.message });
   }
 });

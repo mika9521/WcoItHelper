@@ -11,23 +11,23 @@
 <div class="app-shell">
   <aside class="app-sidebar">
     <div class="app-sidebar-brand">
-      <span class="app-sidebar-brand-icon">🖧</span>
+      <span class="app-sidebar-brand-icon">AD</span>
       <span class="app-sidebar-brand-text">Portal<br />Zarządzania AD</span>
     </div>
     <ul class="app-sidebar-nav" role="tablist">
       <li>
         <button class="app-nav-link active" id="dashboard-tab" data-bs-toggle="tab" data-bs-target="#dashboard-panel" type="button" role="tab">
-          <span class="app-nav-icon">📊</span> Dashboard
+          Dashboard
         </button>
       </li>
       <li>
         <button class="app-nav-link" id="search-tab" data-bs-toggle="tab" data-bs-target="#search-panel" type="button" role="tab">
-          <span class="app-nav-icon">🔍</span> Wyszukiwarka
+          Wyszukiwarka
         </button>
       </li>
       <li>
         <button class="app-nav-link" id="reports-tab" data-bs-toggle="tab" data-bs-target="#reports-panel" type="button" role="tab">
-          <span class="app-nav-icon">📈</span> Raporty
+          Raporty
         </button>
       </li>
     </ul>
@@ -49,12 +49,12 @@
         <div class="card-header">Statystyki Active Directory</div>
         <div class="card-body">
           <div class="row g-3" id="dashboardStats">
-            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon">👤</div><div><div class="text-muted small">Użytkownicy</div><div class="h4 mb-0" id="statUsers">-</div></div></div></div></div>
-            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon">✅</div><div><div class="text-muted small">Aktywni użytkownicy</div><div class="h4 mb-0" id="statActiveUsers">-</div></div></div></div></div>
-            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon">🔓</div><div><div class="text-muted small">Aktywni bez OU zablokowanych</div><div class="h4 mb-0" id="statActiveUsersWithoutBlockedOu">-</div></div></div></div></div>
-            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon">🛡️</div><div><div class="text-muted small">Grupy</div><div class="h4 mb-0" id="statGroups">-</div></div></div></div></div>
-            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon">🖥️</div><div><div class="text-muted small">Komputery</div><div class="h4 mb-0" id="statComputers">-</div></div></div></div></div>
-            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon">📁</div><div><div class="text-muted small">OU</div><div class="h4 mb-0" id="statOus">-</div></div></div></div></div>
+            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon" aria-hidden="true"></div><div><div class="text-muted small">Użytkownicy</div><div class="h4 mb-0" id="statUsers">-</div></div></div></div></div>
+            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon" aria-hidden="true"></div><div><div class="text-muted small">Aktywni użytkownicy</div><div class="h4 mb-0" id="statActiveUsers">-</div></div></div></div></div>
+            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon" aria-hidden="true"></div><div><div class="text-muted small">Aktywni bez OU zablokowanych</div><div class="h4 mb-0" id="statActiveUsersWithoutBlockedOu">-</div></div></div></div></div>
+            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon" aria-hidden="true"></div><div><div class="text-muted small">Grupy</div><div class="h4 mb-0" id="statGroups">-</div></div></div></div></div>
+            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon" aria-hidden="true"></div><div><div class="text-muted small">Komputery</div><div class="h4 mb-0" id="statComputers">-</div></div></div></div></div>
+            <div class="col-md-4 col-xl-3"><div class="card stat-card"><div class="card-body"><div class="stat-icon" aria-hidden="true"></div><div><div class="text-muted small">OU</div><div class="h4 mb-0" id="statOus">-</div></div></div></div></div>
           </div>
           <div class="mt-3 text-muted small">Łącznie obiektów (użytkownicy + grupy + komputery): <strong id="statTotal">-</strong></div>
         </div>
@@ -125,7 +125,7 @@
                 <th style="width:40px;">Typ</th>
                 <th>Nazwa</th>
                 <th>DN</th>
-                <th style="width:120px;">Akcje</th>
+                <th style="width:230px;">Akcje</th>
               </tr>
               </thead>
               <tbody id="results"></tbody>

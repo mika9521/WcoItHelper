@@ -89,8 +89,9 @@ function getTypeLabel(type) {
   return { user: 'Użytkownik', computer: 'Komputer', group: 'Grupa', ou: 'OU' }[type] || type;
 }
 
-function getTypeIcon(type) {
-  return { user: '👤', computer: '🖥️', group: '🛡️', ou: '📁' }[type] || '📄';
+function getTypeBadgeHtml(type) {
+  const abbr = { user: 'U', computer: 'K', group: 'G', ou: 'OU' }[type] || '?';
+  return `<span class="type-badge type-badge-${escapeHtml(type)}">${escapeHtml(abbr)}</span>`;
 }
 
 function getNameFromDn(item) {
@@ -138,6 +139,14 @@ function formatAdDate(raw) {
   return s;
 }
 
+function debounce(fn, wait) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+}
+
 function parseTruthy(value) {
   const v = String(value ?? '').toLowerCase();
   return v === 'true' || v === '1' || v === 'on';
@@ -183,17 +192,17 @@ function renderResultItem(item) {
   const isLockable = type === 'user' || type === 'computer';
   const showUnlock = isLockable && disabled && inBlockedOu;
   const lockActionBtn = showUnlock
-    ? '<button class="btn btn-sm btn-outline-success action-unlock" title="Odblokuj konto">🔓</button>'
-    : (isLockable ? '<button class="btn btn-sm btn-outline-danger action-toggle" title="Zablokuj konto">🔒</button>' : '');
+    ? '<button class="btn btn-sm btn-outline-success action-unlock">Odblokuj</button>'
+    : (isLockable ? '<button class="btn btn-sm btn-outline-danger action-toggle">Zablokuj</button>' : '');
 
   tr.innerHTML = `
-    <td><button type="button" class="btn btn-link p-0 type-open-btn" title="Szczegóły">${getTypeIcon(type)}</button></td>
+    <td><button type="button" class="btn btn-link p-0 type-open-btn" title="Szczegóły">${getTypeBadgeHtml(type)}</button></td>
     <td><button type="button" class="btn btn-link p-0 object-link">${name}</button><div class="small text-muted">${getTypeLabel(type)}</div></td>
     <td class="small">${dn || '-'}</td>
     <td>
-      <div class="d-flex gap-1 justify-content-end">
-        <button class="btn btn-sm btn-outline-primary action-open" title="Szczegóły">🔎</button>
-        <button class="btn btn-sm btn-outline-warning action-move" title="Przenieś">📦</button>
+      <div class="d-flex gap-1 justify-content-end flex-wrap">
+        <button class="btn btn-sm btn-outline-primary action-open">Szczegóły</button>
+        <button class="btn btn-sm btn-outline-warning action-move">Przenieś</button>
         ${lockActionBtn}
       </div>
     </td>
@@ -315,7 +324,7 @@ function memberOfTemplate(data) {
   const userDn = data.distinguishedName || data.dn;
   return `
     <div class="mb-2 group-member-list" id="memberOfList" data-userdn="${escapeHtml(userDn)}">
-      ${groups.map((g) => `<div class="member-of-line" data-groupdn="${escapeHtml(g)}"><span class="badge text-bg-info group-badge">${escapeHtml(g)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-group-btn ms-2" data-groupdn="${escapeHtml(g)}">✕</button></div>`).join('') || '<span class="text-muted">Brak grup</span>'}
+      ${groups.map((g) => `<div class="member-of-line" data-groupdn="${escapeHtml(g)}"><span class="badge text-bg-info group-badge">${escapeHtml(g)}</span><button type="button" class="btn-close remove-group-btn ms-2" aria-label="Usuń" data-groupdn="${escapeHtml(g)}"></button></div>`).join('') || '<span class="text-muted">Brak grup</span>'}
     </div>
     <div class="d-flex gap-2">
       <button class="btn btn-outline-primary btn-sm" id="openAddGroupModal" data-userdn="${userDn}">Dodaj</button>
@@ -329,7 +338,7 @@ function membersTemplate(data) {
   const groupDn = data.distinguishedName || data.dn;
   return `
     <div class="mb-2 group-member-list" id="membersList" data-groupdn="${escapeHtml(groupDn)}">
-      ${members.map((m) => `<div class="member-of-line" data-memberdn="${escapeHtml(m)}"><span class="badge text-bg-secondary group-badge">${escapeHtml(m)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-member-btn ms-2" data-memberdn="${escapeHtml(m)}">✕</button></div>`).join('') || '<span class="text-muted">Brak członków</span>'}
+      ${members.map((m) => `<div class="member-of-line" data-memberdn="${escapeHtml(m)}"><span class="badge text-bg-secondary group-badge">${escapeHtml(m)}</span><button type="button" class="btn-close remove-member-btn ms-2" aria-label="Usuń" data-memberdn="${escapeHtml(m)}"></button></div>`).join('') || '<span class="text-muted">Brak członków</span>'}
     </div>
     <div class="d-flex gap-2">
       <button class="btn btn-outline-primary btn-sm" id="openAddMemberModal" data-groupdn="${escapeHtml(groupDn)}">Dodaj członka</button>
@@ -339,7 +348,7 @@ function membersTemplate(data) {
 
 function renderPendingMemberEntry(memberDn, pendingAdd = false) {
   const badgeClass = pendingAdd ? 'text-bg-warning text-dark' : 'text-bg-secondary';
-  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-memberdn="${escapeHtml(memberDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(memberDn)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-member-btn ms-2" data-memberdn="${escapeHtml(memberDn)}">✕</button></div>`;
+  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-memberdn="${escapeHtml(memberDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(memberDn)}</span><button type="button" class="btn-close remove-member-btn ms-2" aria-label="Usuń" data-memberdn="${escapeHtml(memberDn)}"></button></div>`;
 }
 
 function userSettingsTemplate(data) {
@@ -392,11 +401,33 @@ function userSettingsTemplate(data) {
   `;
 }
 
+function userDataTemplate(data) {
+  const rows = [
+    ['Imię', data.givenName],
+    ['Nazwisko', data.sn],
+    ['Login', data.sAMAccountName],
+    ['Email', data.mail],
+    ['Nazwa wyświetlana', data.displayName],
+    ['DN', data.distinguishedName || data.dn],
+    ['Ostatnie logowanie', formatAdDate(data.lastLogonTimestamp || data.lastLogon)],
+    ['Data utworzenia', formatAdDate(data.whenCreated)]
+  ];
+  return `<div class="d-grid gap-2">${rows.map(([label, value]) => `<div class="input-group input-group-sm"><span class="input-group-text">${escapeHtml(label)}</span><input class="form-control" readonly value="${escapeHtml(value || '-')}" /></div>`).join('')}</div>`;
+}
+
+function certificatesTemplate(dn) {
+  return `
+    <div class="small text-muted mb-2">Certyfikaty kart inteligentnych (smart card) przypisane do konta w AD.</div>
+    <div class="user-certificates-list" data-dn="${escapeHtml(dn || '')}">Ładowanie certyfikatów…</div>
+  `;
+}
+
 function userTemplate(data) {
   return tabsTemplate([
-    { id: 'u-data', title: 'Dane', content: dataTableTemplate(data) },
+    { id: 'u-data', title: 'Dane', content: userDataTemplate(data) },
     { id: 'u-settings', title: 'Ustawienia', content: userSettingsTemplate(data) },
     { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'u-certs', title: 'Certyfikaty', content: certificatesTemplate(data.distinguishedName || data.dn) },
     { id: 'u-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'user') },
     { id: 'u-dev', title: 'DEV', content: devTemplate(data) }
   ]);
@@ -420,8 +451,8 @@ function computerAccountNote(data) {
 function bitlockerTemplate(dn) {
   return `
     <div class="d-flex gap-2 mb-2">
-      <button type="button" class="btn btn-sm btn-outline-secondary" id="copyAllBitlockerBtn">📋 Kopiuj wszystkie klucze</button>
-      <button type="button" class="btn btn-sm btn-outline-secondary" id="exportBitlockerPdfBtn">📄 Eksportuj do PDF</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="copyAllBitlockerBtn">Kopiuj wszystkie klucze</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="exportBitlockerPdfBtn">Eksportuj do PDF</button>
     </div>
     <div class="bitlocker-keys-list" data-dn="${escapeHtml(dn || '')}">Ładowanie kluczy BitLocker…</div>
   `;
@@ -651,6 +682,56 @@ async function loadBitlockerKeys(dn) {
   }
 }
 
+async function loadUserCertificates(dn) {
+  const holder = document.querySelector('.user-certificates-list');
+  if (!holder || !dn) return;
+  try {
+    const rows = await api(`/api/user/certificates?dn=${encodeURIComponent(dn)}`);
+    holder.innerHTML = rows.length
+      ? `
+        <div class="table-responsive">
+          <table class="table table-sm table-striped align-middle mb-0">
+            <thead>
+              <tr><th>Podmiot</th><th>Wydawca</th><th>Ważny od</th><th>Ważny do</th><th>Numer seryjny</th><th></th></tr>
+            </thead>
+            <tbody>
+              ${rows.map((row) => `
+                <tr>
+                  <td class="small text-break">${escapeHtml(row.subjectCn || row.subject || '-')}</td>
+                  <td class="small text-break">${escapeHtml(row.issuerCn || row.issuer || '-')}</td>
+                  <td class="small">${escapeHtml(formatAdDate(row.validFrom))}</td>
+                  <td class="small">${escapeHtml(formatAdDate(row.validTo))}</td>
+                  <td class="font-monospace small text-break">${escapeHtml(row.serialNumber || '-')}</td>
+                  <td><button type="button" class="btn btn-sm btn-outline-danger revoke-certificate-btn" data-raw="${escapeHtml(row.raw)}" data-subject="${escapeHtml(row.subjectCn || row.subject || '')}">Odwołaj certyfikat</button></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `
+      : '<div class="text-muted small">Brak certyfikatów przypisanych do tego konta.</div>';
+
+    holder.querySelectorAll('.revoke-certificate-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const subject = btn.dataset.subject || 'ten certyfikat';
+        if (!window.confirm(`Odwołać certyfikat "${subject}"? Użytkownik nie będzie mógł się nim zalogować kartą inteligentną.`)) return;
+        try {
+          await api('/api/user/certificates/revoke', {
+            method: 'POST',
+            body: JSON.stringify({ userDn: dn, certificateBase64: btn.dataset.raw, subjectCn: subject })
+          });
+          showToast('Certyfikat odwołany');
+          await loadUserCertificates(dn);
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+    });
+  } catch (error) {
+    holder.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
+  }
+}
+
 async function loadGlobalAuditWidgets() {
   try {
     const loginRows = await api('/api/audit/login-history?limit=30');
@@ -730,7 +811,7 @@ async function initPortalActivityActions() {
 
 function renderPendingMemberLine(groupDn, pendingAdd = false) {
   const badgeClass = pendingAdd ? 'text-bg-warning text-dark' : 'text-bg-info';
-  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-groupdn="${escapeHtml(groupDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(groupDn)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-group-btn ms-2" data-groupdn="${escapeHtml(groupDn)}">✕</button></div>`;
+  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-groupdn="${escapeHtml(groupDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(groupDn)}</span><button type="button" class="btn-close remove-group-btn ms-2" aria-label="Usuń" data-groupdn="${escapeHtml(groupDn)}"></button></div>`;
 }
 
 function moveTemplate(objectDn) {
@@ -763,6 +844,7 @@ async function openObject(dn, typeHint) {
     bindModalActions();
     await loadObjectAuditLogs(state.currentObjectDn);
     if (type === 'computer') await loadBitlockerKeys(state.currentObjectDn);
+    if (type === 'user') await loadUserCertificates(state.currentObjectDn);
     objectModal.show();
   } catch (error) {
     showToast(error.message, true);
@@ -810,7 +892,7 @@ function renderLookupItem(container, item, onPick) {
   btn.type = 'button';
   const type = detectType(item);
   btn.className = 'list-group-item list-group-item-action';
-  btn.innerHTML = `${getTypeIcon(type)} ${escapeHtml(getDisplayName(item))}<div class="small text-muted">${escapeHtml(item.dn || item.distinguishedName || '')}</div>`;
+  btn.innerHTML = `${getTypeBadgeHtml(type)} ${escapeHtml(getDisplayName(item))}<div class="small text-muted">${escapeHtml(item.dn || item.distinguishedName || '')}</div>`;
   btn.addEventListener('click', () => onPick(item));
   container.appendChild(btn);
 }
@@ -979,7 +1061,7 @@ function createOuTreeNode(item, onlyOu = true) {
   header.className = 'ou-tree-node';
   header.innerHTML = `
     <button type="button" class="btn btn-sm btn-link p-0 me-1 ou-expand-btn ${type === 'ou' ? '' : 'invisible'}">▶</button>
-    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeIcon(type)} ${escapeHtml(getDisplayName(item))}</button>
+    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeBadgeHtml(type)} ${escapeHtml(getDisplayName(item))}</button>
   `;
   li.appendChild(header);
 
@@ -1282,7 +1364,67 @@ applyObjectChangesBtn.addEventListener('click', async () => {
   }
 });
 
-document.getElementById('newUserForm').addEventListener('submit', async (event) => {
+const newUserForm = document.getElementById('newUserForm');
+const newUserFirstName = document.getElementById('newUserFirstName');
+const newUserLastName = document.getElementById('newUserLastName');
+const newUserLogin = document.getElementById('newUserLogin');
+const newUserLoginStatus = document.getElementById('newUserLoginStatus');
+const newUserSubmitBtn = document.getElementById('newUserSubmitBtn');
+
+function setNewUserLoginState(available, message) {
+  if (newUserSubmitBtn) newUserSubmitBtn.disabled = !available;
+  if (newUserLoginStatus) {
+    newUserLoginStatus.textContent = message || '';
+    newUserLoginStatus.classList.toggle('text-danger', !available && Boolean(message));
+    newUserLoginStatus.classList.toggle('text-success', available);
+  }
+}
+
+async function checkNewUserLoginAvailability() {
+  const login = newUserLogin?.value.trim() || '';
+  if (!login) {
+    setNewUserLoginState(false, '');
+    return;
+  }
+  try {
+    setNewUserLoginState(false, 'Sprawdzanie dostępności…');
+    const result = await api(`/api/user/login-availability?login=${encodeURIComponent(login)}`);
+    setNewUserLoginState(Boolean(result.available), result.available ? 'Login dostępny.' : 'Login zajęty — wybierz inny.');
+  } catch (error) {
+    setNewUserLoginState(false, error.message);
+  }
+}
+
+async function autoFillNewUserLogin() {
+  const firstName = newUserFirstName?.value.trim() || '';
+  const lastName = newUserLastName?.value.trim() || '';
+  if (!firstName || !lastName) {
+    if (newUserLogin) newUserLogin.value = '';
+    setNewUserLoginState(false, '');
+    return;
+  }
+  try {
+    setNewUserLoginState(false, 'Sprawdzanie dostępności…');
+    const result = await api(`/api/user/suggest-login?firstName=${encodeURIComponent(firstName)}&lastName=${encodeURIComponent(lastName)}`);
+    if (newUserLogin) newUserLogin.value = result.login || '';
+    setNewUserLoginState(Boolean(result.available), result.available ? 'Login dostępny.' : 'Nie udało się znaleźć wolnego loginu — wybierz ręcznie.');
+  } catch (error) {
+    setNewUserLoginState(false, error.message);
+  }
+}
+
+const debouncedAutoFillNewUserLogin = debounce(autoFillNewUserLogin, 350);
+const debouncedCheckNewUserLoginAvailability = debounce(checkNewUserLoginAvailability, 350);
+
+newUserFirstName?.addEventListener('input', debouncedAutoFillNewUserLogin);
+newUserLastName?.addEventListener('input', debouncedAutoFillNewUserLogin);
+newUserLogin?.addEventListener('input', debouncedCheckNewUserLoginAvailability);
+
+document.getElementById('newUserModal')?.addEventListener('show.bs.modal', () => {
+  setNewUserLoginState(false, '');
+});
+
+newUserForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   try {
     const payload = Object.fromEntries(new FormData(event.target).entries());
@@ -1295,6 +1437,7 @@ document.getElementById('newUserForm').addEventListener('submit', async (event) 
     await api('/api/user/create', { method: 'POST', body: JSON.stringify(payload) });
     showToast('Użytkownik utworzony');
     event.target.reset();
+    setNewUserLoginState(false, '');
   } catch (error) {
     showToast(error.message, true);
   }
