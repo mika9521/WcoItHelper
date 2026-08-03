@@ -1,44 +1,246 @@
-/* ===== Ogólny wygląd portalu ===== */
+/* ===== System projektowy portalu ===== */
 :root {
+  --accent: #4f46e5;
+  --accent-rgb: 79, 70, 229;
+  --accent-hover: #4338ca;
+  --accent-active: #3730a3;
+  --accent-soft: rgba(79, 70, 229, 0.1);
+
+  --ink-900: #0f172a;
+  --ink-700: #334155;
+  --ink-500: #64748b;
+  --ink-300: #cbd5e1;
+  --ink-100: #eef1f6;
+
   --app-bg: #eef1f6;
   --app-card-radius: 0.75rem;
   --app-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 10px rgba(15, 23, 42, 0.05);
   --app-card-shadow-hover: 0 2px 4px rgba(15, 23, 42, 0.08), 0 8px 20px rgba(15, 23, 42, 0.08);
+
+  --bs-link-color: var(--accent);
+  --bs-link-hover-color: var(--accent-hover);
 }
 
 body {
   background: var(--app-bg);
+  color: var(--ink-900);
   -webkit-font-smoothing: antialiased;
 }
 
-.navbar {
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+/* Retint Bootstrap's hardcoded "primary blue" to the portal's accent color
+   (Bootstrap bakes the hex directly into these component-scoped custom
+   properties, so a plain :root override does not reach them). */
+.btn-primary {
+  --bs-btn-bg: var(--accent);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-bg: var(--accent-hover);
+  --bs-btn-hover-border-color: var(--accent-hover);
+  --bs-btn-active-bg: var(--accent-active);
+  --bs-btn-active-border-color: var(--accent-active);
+  --bs-btn-disabled-bg: var(--accent);
+  --bs-btn-disabled-border-color: var(--accent);
+  --bs-btn-focus-shadow-rgb: var(--accent-rgb);
 }
-.navbar .navbar-brand {
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.btn-outline-primary {
+  --bs-btn-color: var(--accent);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-bg: var(--accent);
+  --bs-btn-hover-border-color: var(--accent);
+  --bs-btn-active-bg: var(--accent);
+  --bs-btn-active-border-color: var(--accent);
+  --bs-btn-disabled-color: var(--accent);
+  --bs-btn-disabled-border-color: var(--accent);
+  --bs-btn-focus-shadow-rgb: var(--accent-rgb);
 }
-.navbar .navbar-brand::before {
-  content: "🖧";
-  font-size: 1.15rem;
+.nav-pills {
+  --bs-nav-pills-link-active-bg: var(--accent);
 }
-.navbar .nav-link {
-  border-radius: 0.5rem;
-  margin: 0 0.15rem;
-  transition: background-color 0.15s ease, color 0.15s ease;
+.list-group {
+  --bs-list-group-active-bg: var(--accent);
+  --bs-list-group-active-border-color: var(--accent);
 }
-.navbar .nav-link:hover {
-  background-color: rgba(255, 255, 255, 0.08);
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.25rem var(--accent-soft);
 }
-.navbar .nav-link.active {
-  background-color: rgba(255, 255, 255, 0.12);
+.form-check-input:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+.form-check-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.25rem var(--accent-soft);
 }
 
-main.container {
+main.container,
+.app-main {
   max-width: 1200px;
+}
+
+/* ===== Układ: boczna nawigacja + treść ===== */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  align-items: stretch;
+}
+
+.app-sidebar {
+  flex: 0 0 240px;
+  width: 240px;
+  background: linear-gradient(180deg, #111827 0%, #1e2433 100%);
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 1.25rem 1rem;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+}
+
+.app-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.25rem 0.4rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 1rem;
+}
+.app-sidebar-brand-icon {
+  font-size: 1.4rem;
+  flex: 0 0 auto;
+}
+.app-sidebar-brand-text {
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.app-sidebar-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.app-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.55rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.app-nav-link:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.app-nav-link.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.5);
+}
+.app-nav-icon {
+  font-size: 1.05rem;
+  flex: 0 0 auto;
+}
+
+.app-sidebar-user {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.app-user-avatar {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.app-user-info {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.app-user-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-logout-btn {
+  border: none;
+  background: none;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  padding: 0;
+  text-decoration: underline;
+}
+.app-logout-btn:hover {
+  color: #fff;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 1.75rem 2rem;
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    flex-direction: column;
+  }
+  .app-sidebar {
+    position: static;
+    height: auto;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+  }
+  .app-sidebar-brand {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding: 0;
+    flex: 1 1 auto;
+  }
+  .app-sidebar-nav {
+    flex-direction: row;
+    flex: 1 1 100%;
+    order: 3;
+  }
+  .app-sidebar-user {
+    margin-top: 0;
+    border-top: none;
+    padding-top: 0;
+    flex: 0 0 auto;
+  }
+  .app-main {
+    padding: 1.25rem;
+  }
 }
 
 .card {
@@ -55,17 +257,34 @@ main.container {
 }
 
 .stat-card {
-  border-color: rgba(15, 23, 42, 0.06);
+  border: 1px solid rgba(15, 23, 42, 0.06);
   border-radius: var(--app-card-radius);
   transition: transform 0.15s ease, box-shadow 0.15s ease;
-  border-left: 4px solid var(--bs-primary);
+  box-shadow: var(--app-card-shadow);
 }
 .stat-card:hover {
   transform: translateY(-2px);
   box-shadow: var(--app-card-shadow-hover);
 }
+.stat-card .card-body {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+.stat-icon {
+  flex: 0 0 auto;
+  width: 2.6rem;
+  height: 2.6rem;
+  border-radius: 0.65rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  background: var(--accent-soft);
+}
 .stat-card .h4 {
   font-weight: 700;
+  color: var(--ink-900);
 }
 
 #resultsTable thead th {
@@ -80,7 +299,8 @@ main.container {
 }
 
 .list-group-item.report-link.active {
-  border-color: var(--bs-primary);
+  background-color: var(--accent);
+  border-color: var(--accent);
 }
 
 .modal-content {
@@ -93,6 +313,36 @@ main.container {
 }
 .modal-footer {
   border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+/* Segmented "pill" look for the tabs generated inside object modals
+   (tabsTemplate() in app.js emits standard Bootstrap nav-tabs markup). */
+#objectBody .nav-tabs {
+  border-bottom: none;
+  background: var(--ink-100);
+  padding: 0.25rem;
+  border-radius: 0.6rem;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+#objectBody .nav-tabs .nav-link {
+  border: none;
+  border-radius: 0.45rem;
+  color: var(--ink-700);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.4rem 0.85rem;
+}
+#objectBody .nav-tabs .nav-link:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+#objectBody .nav-tabs .nav-link.active {
+  background: #fff;
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+#objectBody .tab-content {
+  border: none !important;
 }
 
 .btn {
