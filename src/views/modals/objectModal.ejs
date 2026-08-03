@@ -56,3 +56,28 @@
     </div>
   </div>
 </div>
+
+<div class="modal fade" id="unlockAccountModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Odblokuj konto</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-2">Odblokujesz (włączysz) konto:</p>
+        <div class="small text-break text-muted mb-3" id="unlockTargetDnLabel">-</div>
+        <label class="form-label">Docelowe OU po odblokowaniu</label>
+        <div class="input-group">
+          <input id="unlockTargetOuDn" class="form-control" placeholder="Wybierz OU..." readonly required />
+          <button type="button" class="btn btn-outline-secondary pick-ou-btn" data-target-input="unlockTargetOuDn" data-ou-only="1">Wybierz OU</button>
+        </div>
+        <div class="form-text mt-2">Konto zostanie włączone i przeniesione do wybranego OU.</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+        <button type="button" class="btn btn-success" id="confirmUnlockBtn">Odblokuj konto</button>
+      </div>
+    </div>
+  </div>
+</div>

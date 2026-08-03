@@ -32,6 +32,33 @@
   </div>
 </div>
 
+<div class="modal fade" id="addMemberModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Dodaj członka grupy</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2 mb-3">
+          <div class="col-4">
+            <select id="memberLookupType" class="form-select">
+              <option value="all">Wszystkie typy</option>
+              <option value="user">Użytkownicy</option>
+              <option value="computer">Komputery</option>
+              <option value="group">Grupy</option>
+            </select>
+          </div>
+          <div class="col-8">
+            <input id="memberLookupInput" class="form-control" placeholder="Szukaj użytkownika, komputera lub grupy..." />
+          </div>
+        </div>
+        <div id="memberLookupResults" class="list-group"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal fade" id="copyGroupsModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">

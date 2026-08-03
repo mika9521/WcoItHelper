@@ -32,9 +32,11 @@ const objectModal = new bootstrap.Modal(document.getElementById('objectModal'));
 const groupSearchModal = new bootstrap.Modal(document.getElementById('groupSearchModal'));
 const referenceUserModal = new bootstrap.Modal(document.getElementById('referenceUserModal'));
 const copyGroupsModal = new bootstrap.Modal(document.getElementById('copyGroupsModal'));
+const addMemberModal = new bootstrap.Modal(document.getElementById('addMemberModal'));
 const ouPickerModal = new bootstrap.Modal(document.getElementById('ouPickerModal'));
 const softDeleteConfirmModal = new bootstrap.Modal(document.getElementById('softDeleteConfirmModal'));
 const softDeleteSuccessModal = new bootstrap.Modal(document.getElementById('softDeleteSuccessModal'));
+const unlockAccountModal = new bootstrap.Modal(document.getElementById('unlockAccountModal'));
 const applyObjectChangesBtn = document.getElementById('applyObjectChangesBtn');
 
 const state = {
@@ -45,6 +47,8 @@ const state = {
   selectedOuOuOnly: true,
   selectedOuDn: null,
   softDeleteTargetDn: null,
+  unlockTargetDn: null,
+  bitlockerKeys: [],
   currentObjectDn: null,
   pendingChanges: null,
   ouTreeCache: new Map(),
@@ -176,6 +180,12 @@ function renderResultItem(item) {
     openObject(dn, type);
   };
 
+  const isLockable = type === 'user' || type === 'computer';
+  const showUnlock = isLockable && disabled && inBlockedOu;
+  const lockActionBtn = showUnlock
+    ? '<button class="btn btn-sm btn-outline-success action-unlock" title="Odblokuj konto">🔓</button>'
+    : (isLockable ? '<button class="btn btn-sm btn-outline-danger action-toggle" title="Zablokuj konto">🔒</button>' : '');
+
   tr.innerHTML = `
     <td><button type="button" class="btn btn-link p-0 type-open-btn" title="Szczegóły">${getTypeIcon(type)}</button></td>
     <td><button type="button" class="btn btn-link p-0 object-link">${name}</button><div class="small text-muted">${getTypeLabel(type)}</div></td>
@@ -184,7 +194,7 @@ function renderResultItem(item) {
       <div class="d-flex gap-1 justify-content-end">
         <button class="btn btn-sm btn-outline-primary action-open" title="Szczegóły">🔎</button>
         <button class="btn btn-sm btn-outline-warning action-move" title="Przenieś">📦</button>
-        ${(type === 'user' || type === 'computer') ? '<button class="btn btn-sm btn-outline-danger action-toggle" title="Włącz/Wyłącz">🔒</button>' : ''}
+        ${lockActionBtn}
       </div>
     </td>
   `;
@@ -194,6 +204,7 @@ function renderResultItem(item) {
   tr.querySelector('.action-open').addEventListener('click', openDetails);
   tr.querySelector('.action-move').addEventListener('click', () => openMoveOnly(dn, getDisplayName(item) || dn));
   tr.querySelector('.action-toggle')?.addEventListener('click', () => openSoftDeleteModal(item));
+  tr.querySelector('.action-unlock')?.addEventListener('click', () => openUnlockModal(item));
   return tr;
 }
 
@@ -313,6 +324,24 @@ function memberOfTemplate(data) {
   `;
 }
 
+function membersTemplate(data) {
+  const members = Array.isArray(data.member) ? data.member : (data.member ? [data.member] : []);
+  const groupDn = data.distinguishedName || data.dn;
+  return `
+    <div class="mb-2 group-member-list" id="membersList" data-groupdn="${escapeHtml(groupDn)}">
+      ${members.map((m) => `<div class="member-of-line" data-memberdn="${escapeHtml(m)}"><span class="badge text-bg-secondary group-badge">${escapeHtml(m)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-member-btn ms-2" data-memberdn="${escapeHtml(m)}">✕</button></div>`).join('') || '<span class="text-muted">Brak członków</span>'}
+    </div>
+    <div class="d-flex gap-2">
+      <button class="btn btn-outline-primary btn-sm" id="openAddMemberModal" data-groupdn="${escapeHtml(groupDn)}">Dodaj członka</button>
+    </div>
+  `;
+}
+
+function renderPendingMemberEntry(memberDn, pendingAdd = false) {
+  const badgeClass = pendingAdd ? 'text-bg-warning text-dark' : 'text-bg-secondary';
+  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-memberdn="${escapeHtml(memberDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(memberDn)}</span><button type="button" class="btn btn-sm btn-outline-danger remove-member-btn ms-2" data-memberdn="${escapeHtml(memberDn)}">✕</button></div>`;
+}
+
 function userSettingsTemplate(data) {
   const mustChangePwd = String(data.pwdLastSet || '') === '0';
   const passwordNeverExpires = isUacFlagSet(data, 0x10000);
@@ -373,9 +402,35 @@ function userTemplate(data) {
   ]);
 }
 
+function computerAccountNote(data) {
+  const sam = data.sAMAccountName || '';
+  return `
+    <div class="alert alert-info small mt-3 mb-0">
+      <strong>Nazwa konta komputera (sAMAccountName):</strong> <code>${escapeHtml(sam || '-')}</code>
+      <div class="mt-1">
+        Znak <code>$</code> na końcu to standardowy zapis Active Directory dla kont maszynowych
+        (odróżnia konto komputera od kont użytkowników o tej samej nazwie) — to nie błąd.
+        Sama nazwa NetBIOS komputera (pole <code>name</code>/<code>cn</code>, widoczne np. we właściwościach
+        systemu Windows) pozostaje bez znaku <code>$</code>.
+      </div>
+    </div>
+  `;
+}
+
+function bitlockerTemplate(dn) {
+  return `
+    <div class="d-flex gap-2 mb-2">
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="copyAllBitlockerBtn">📋 Kopiuj wszystkie klucze</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="exportBitlockerPdfBtn">📄 Eksportuj do PDF</button>
+    </div>
+    <div class="bitlocker-keys-list" data-dn="${escapeHtml(dn || '')}">Ładowanie kluczy BitLocker…</div>
+  `;
+}
+
 function computerTemplate(data) {
   return tabsTemplate([
-    { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) },
+    { id: 'c-data', title: 'Dane komputera', content: dataTableTemplate(data) + computerAccountNote(data) },
+    { id: 'c-bitlocker', title: 'BitLocker', content: bitlockerTemplate(data.distinguishedName || data.dn) },
     { id: 'c-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
     { id: 'c-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'computer') },
     { id: 'c-dev', title: 'DEV', content: devTemplate(data) }
@@ -385,6 +440,7 @@ function computerTemplate(data) {
 function groupTemplate(data) {
   return tabsTemplate([
     { id: 'g-data', title: 'Dane', content: dataTableTemplate(data) },
+    { id: 'g-members', title: 'Członkowie grupy', content: membersTemplate(data) },
     { id: 'g-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
     { id: 'g-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'group') },
     { id: 'g-dev', title: 'DEV', content: devTemplate(data) }
@@ -406,12 +462,71 @@ function auditLogsTemplate(dn, type) {
   `;
 }
 
+function dnLabel(dn) {
+  const s = String(dn || '');
+  if (!s) return '';
+  const first = s.split(',')[0] || s;
+  return first.replace(/^[A-Za-z]+=/, '').trim() || s;
+}
+
+function formatDnList(list) {
+  const arr = Array.isArray(list) ? list.filter(Boolean) : [];
+  if (!arr.length) return '<span class="text-muted">—</span>';
+  return `<ul class="mb-0 ps-3">${arr.map((dn) => `<li class="small" title="${escapeHtml(dn)}">${escapeHtml(dnLabel(dn))}</li>`).join('')}</ul>`;
+}
+
+function formatAuditDetails(event) {
+  const details = event.details || {};
+  const action = event.action;
+  const rows = [];
+
+  if (action === 'user_groups_update' || action === 'group_members_update') {
+    const label = action === 'group_members_update' ? 'członka(ów)' : 'grup(y)';
+    if ((details.added || []).length) {
+      rows.push(`<div class="mt-1"><span class="text-success fw-semibold">+ Dodano ${label}:</span>${formatDnList(details.added)}</div>`);
+    }
+    if ((details.removed || []).length) {
+      rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">− Usunięto ${label}:</span>${formatDnList(details.removed)}</div>`);
+    }
+    if (!(details.added || []).length && !(details.removed || []).length) {
+      rows.push('<div class="mt-1 text-muted">Brak zmian w listach.</div>');
+    }
+  } else if (action === 'user_groups_copy') {
+    if ((details.copiedGroups || []).length) {
+      rows.push(`<div class="mt-1"><span class="fw-semibold">Skopiowane grupy:</span>${formatDnList(details.copiedGroups)}</div>`);
+    }
+  } else if (action === 'account_enabled_toggle') {
+    rows.push(`<div class="mt-1">Nowy stan konta: <strong>${details.enabled ? 'włączone' : 'wyłączone'}</strong></div>`);
+  } else if (action === 'account_unlock') {
+    rows.push('<div class="mt-1">Konto odblokowane (włączone)' + (event.targetDn ? ` i przeniesione do <code class="small">${escapeHtml(event.targetDn)}</code>` : '') + '</div>');
+  } else if (action === 'object_move') {
+    if (event.targetDn) rows.push(`<div class="mt-1">Przeniesiono do: <code class="small">${escapeHtml(event.targetDn)}</code></div>`);
+  } else if (action === 'user_settings_update') {
+    if ((details.changedKeys || []).length) {
+      rows.push(`<div class="mt-1"><span class="fw-semibold">Zmienione pola:</span> ${details.changedKeys.map((k) => `<code class="small">${escapeHtml(k)}</code>`).join(' ')}</div>`);
+    }
+  } else if (action === 'group_create') {
+    if (details.payload) {
+      rows.push(`<div class="mt-1"><span class="fw-semibold">Nazwa:</span> ${escapeHtml(details.payload.name || '-')} · <span class="fw-semibold">sAMAccountName:</span> ${escapeHtml(details.payload.samAccountName || '-')}</div>`);
+    }
+  } else if (action === 'user_create') {
+    if (details.login) rows.push(`<div class="mt-1"><span class="fw-semibold">Login:</span> ${escapeHtml(details.login)}</div>`);
+  } else if (action === 'search') {
+    rows.push(`<div class="mt-1">Zapytanie: <code>${escapeHtml(details.query || '')}</code> · typ: ${escapeHtml(details.type || '-')} · wyników: ${details.results ?? '-'}</div>`);
+  } else if (details && Object.keys(details).length) {
+    rows.push(`<div class="mt-1"><code class="small">${escapeHtml(JSON.stringify(details))}</code></div>`);
+  }
+
+  return rows.join('');
+}
+
 function formatAuditEventLine(event) {
   const timestamp = formatAdDate(event.timestamp);
   const actor = event.actorDisplayName || event.actorLogin || 'nieznany';
   const action = event.action || 'akcja';
   const statusClass = event.status === 'success' ? 'text-bg-success' : 'text-bg-danger';
   const message = event.message || '-';
+  const detailsHtml = formatAuditDetails(event);
   return `
     <div class="border rounded p-2 mb-2">
       <div class="d-flex align-items-center justify-content-between mb-1">
@@ -421,6 +536,7 @@ function formatAuditEventLine(event) {
       <div class="small"><code>${escapeHtml(action)}</code> · ${escapeHtml(timestamp)}</div>
       <div class="small mt-1">${escapeHtml(message)}</div>
       <div class="small text-muted mt-1">${escapeHtml(event.scopeDn || event.targetDn || '')}</div>
+      ${detailsHtml ? `<div class="audit-details">${detailsHtml}</div>` : ''}
     </div>
   `;
 }
@@ -433,6 +549,103 @@ async function loadObjectAuditLogs(objectDn) {
     holder.innerHTML = rows.length
       ? rows.map((event) => formatAuditEventLine(event)).join('')
       : '<div class="text-muted small">Brak logów dla tego obiektu.</div>';
+  } catch (error) {
+    holder.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function copyTextToClipboard(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    // spadamy do awaryjnego rozwiązania poniżej
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    document.execCommand('copy');
+  } catch {
+    // brak wsparcia — nic więcej nie możemy zrobić
+  }
+  document.body.removeChild(textarea);
+}
+
+function exportBitlockerKeysToPdf(dn, keys) {
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    doc.setFontSize(14);
+    doc.text('Klucze odzyskiwania BitLocker', 14, 16);
+    doc.setFontSize(10);
+    doc.text(`Komputer: ${dn || '-'}`, 14, 24);
+    doc.text(`Wygenerowano: ${new Date().toLocaleString('pl-PL')}`, 14, 30);
+
+    let y = 42;
+    keys.forEach((key, idx) => {
+      if (y > 270) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFont(undefined, 'bold');
+      doc.text(`${idx + 1}. ${key.name || '-'}`, 14, y);
+      doc.setFont(undefined, 'normal');
+      y += 6;
+      doc.text(`Klucz: ${key.recoveryPassword || '-'}`, 14, y);
+      y += 6;
+      doc.text(`Utworzono: ${formatAdDate(key.whenCreated)}`, 14, y);
+      y += 10;
+    });
+
+    const fileSafeDn = (dnLabel(dn) || 'komputer').replace(/[^a-z0-9_-]+/gi, '_');
+    doc.save(`bitlocker-${fileSafeDn}.pdf`);
+  } catch (error) {
+    showToast(`Błąd eksportu PDF: ${error.message}`, true);
+  }
+}
+
+async function loadBitlockerKeys(dn) {
+  const holder = document.querySelector('.bitlocker-keys-list');
+  if (!holder || !dn) return;
+  try {
+    const rows = await api(`/api/computer/bitlocker?dn=${encodeURIComponent(dn)}`);
+    state.bitlockerKeys = rows;
+    holder.innerHTML = rows.length
+      ? `
+        <div class="table-responsive">
+          <table class="table table-sm table-striped align-middle mb-0">
+            <thead>
+              <tr><th>Nazwa (GUID)</th><th>Klucz odzyskiwania</th><th>Data utworzenia</th><th></th></tr>
+            </thead>
+            <tbody>
+              ${rows.map((row, idx) => `
+                <tr>
+                  <td class="small text-break">${escapeHtml(row.name || '-')}</td>
+                  <td class="font-monospace small text-break">${escapeHtml(row.recoveryPassword || '-')}</td>
+                  <td class="small">${escapeHtml(formatAdDate(row.whenCreated))}</td>
+                  <td><button type="button" class="btn btn-sm btn-outline-secondary copy-bitlocker-key" data-index="${idx}">Kopiuj</button></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `
+      : '<div class="text-muted small">Brak zapisanych kluczy BitLocker dla tego komputera.</div>';
+
+    holder.querySelectorAll('.copy-bitlocker-key').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const row = state.bitlockerKeys[Number(btn.dataset.index)];
+        await copyTextToClipboard(row?.recoveryPassword || '');
+        showToast('Skopiowano klucz do schowka');
+      });
+    });
   } catch (error) {
     holder.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
   }
@@ -545,10 +758,11 @@ async function openObject(dn, typeHint) {
           ? ouTemplate(data)
           : userTemplate(data);
     state.currentObjectDn = data.distinguishedName || data.dn || dn;
-    state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
+    state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), addMembers: new Set(), removeMembers: new Set(), moveTargetDn: null };
     applyObjectChangesBtn.classList.remove('d-none');
     bindModalActions();
     await loadObjectAuditLogs(state.currentObjectDn);
+    if (type === 'computer') await loadBitlockerKeys(state.currentObjectDn);
     objectModal.show();
   } catch (error) {
     showToast(error.message, true);
@@ -577,6 +791,20 @@ function openSoftDeleteModal(item) {
   softDeleteConfirmModal.show();
 }
 
+function openUnlockModal(item) {
+  const dn = item?.dn || item?.distinguishedName;
+  if (!dn) {
+    showToast('Brak DN obiektu do odblokowania', true);
+    return;
+  }
+  state.unlockTargetDn = dn;
+  const label = document.getElementById('unlockTargetDnLabel');
+  if (label) label.textContent = dn;
+  const ouInput = document.getElementById('unlockTargetOuDn');
+  if (ouInput) ouInput.value = '';
+  unlockAccountModal.show();
+}
+
 function renderLookupItem(container, item, onPick) {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -588,11 +816,45 @@ function renderLookupItem(container, item, onPick) {
 }
 
 function bindModalActions() {
+  const copyAllBitlockerBtn = document.getElementById('copyAllBitlockerBtn');
+  if (copyAllBitlockerBtn && !copyAllBitlockerBtn.dataset.bound) {
+    copyAllBitlockerBtn.dataset.bound = '1';
+    copyAllBitlockerBtn.addEventListener('click', async () => {
+      const keys = state.bitlockerKeys || [];
+      if (!keys.length) {
+        showToast('Brak kluczy do skopiowania', true);
+        return;
+      }
+      const text = keys.map((k) => `${k.name || '-'}: ${k.recoveryPassword || '-'}`).join('\n');
+      await copyTextToClipboard(text);
+      showToast('Skopiowano wszystkie klucze do schowka');
+    });
+  }
+
+  const exportBitlockerPdfBtn = document.getElementById('exportBitlockerPdfBtn');
+  if (exportBitlockerPdfBtn && !exportBitlockerPdfBtn.dataset.bound) {
+    exportBitlockerPdfBtn.dataset.bound = '1';
+    exportBitlockerPdfBtn.addEventListener('click', () => {
+      const keys = state.bitlockerKeys || [];
+      if (!keys.length) {
+        showToast('Brak kluczy do eksportu', true);
+        return;
+      }
+      exportBitlockerKeysToPdf(state.currentObjectDn, keys);
+    });
+  }
+
   document.getElementById('openAddGroupModal')?.addEventListener('click', () => {
     state.currentUserDn = document.getElementById('openAddGroupModal').dataset.userdn;
     document.getElementById('groupLookupInput').value = '';
     document.getElementById('groupLookupResults').innerHTML = '';
     groupSearchModal.show();
+  });
+
+  document.getElementById('openAddMemberModal')?.addEventListener('click', () => {
+    document.getElementById('memberLookupInput').value = '';
+    document.getElementById('memberLookupResults').innerHTML = '';
+    addMemberModal.show();
   });
 
   document.getElementById('openReferenceModal')?.addEventListener('click', () => {
@@ -609,6 +871,17 @@ function bindModalActions() {
       const groupDn = btn.dataset.groupdn;
       state.pendingChanges.removeGroups.add(groupDn);
       state.pendingChanges.addGroups.delete(groupDn);
+      btn.closest('.member-of-line')?.classList.add('pending-removal');
+    });
+  });
+
+  document.querySelectorAll('.remove-member-btn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      const memberDn = btn.dataset.memberdn;
+      state.pendingChanges.removeMembers.add(memberDn);
+      state.pendingChanges.addMembers.delete(memberDn);
       btn.closest('.member-of-line')?.classList.add('pending-removal');
     });
   });
@@ -746,8 +1019,11 @@ function createOuTreeNode(item, onlyOu = true) {
 
 document.getElementById('confirmOuBtn').addEventListener('click', () => {
   if (!state.selectedOuDn || !state.selectedOuInputId) return;
-  document.getElementById(state.selectedOuInputId).value = state.selectedOuDn;
-  state.pendingChanges.moveTargetDn = state.selectedOuDn;
+  const input = document.getElementById(state.selectedOuInputId);
+  if (input) {
+    input.value = state.selectedOuDn;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
   ouPickerModal.hide();
 });
 
@@ -761,6 +1037,26 @@ document.getElementById('confirmSoftDeleteBtn')?.addEventListener('click', async
     softDeleteConfirmModal.hide();
     softDeleteSuccessModal.show();
     showToast('Konto zablokowane i przeniesione do OU zablokowane_konta');
+    await runSearch();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+document.getElementById('confirmUnlockBtn')?.addEventListener('click', async () => {
+  if (!state.unlockTargetDn) return;
+  const targetOuDn = document.getElementById('unlockTargetOuDn')?.value || '';
+  if (!targetOuDn) {
+    showToast('Najpierw wybierz docelowe OU', true);
+    return;
+  }
+  try {
+    await api('/api/object/unlock', {
+      method: 'POST',
+      body: JSON.stringify({ objectDn: state.unlockTargetDn, targetOuDn })
+    });
+    unlockAccountModal.hide();
+    showToast('Konto odblokowane i przeniesione');
     await runSearch();
   } catch (error) {
     showToast(error.message, true);
@@ -796,6 +1092,35 @@ document.getElementById('groupLookupInput').addEventListener('input', async (eve
       });
     }
     groupSearchModal.hide();
+    showToast('Dodano do zmian oczekujących');
+  }));
+});
+
+document.getElementById('memberLookupInput').addEventListener('input', async (event) => {
+  const q = event.target.value.trim();
+  const box = document.getElementById('memberLookupResults');
+  if (q.length < 2) {
+    box.innerHTML = '';
+    return;
+  }
+  const type = document.getElementById('memberLookupType')?.value || 'all';
+  const rows = await api(`/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`);
+  box.innerHTML = '';
+  rows.forEach((row) => renderLookupItem(box, row, (item) => {
+    const pickedDn = item.dn || item.distinguishedName;
+    if (pickedDn === state.currentObjectDn) {
+      showToast('Nie można dodać grupy jako własnego członka', true);
+      return;
+    }
+    state.pendingChanges.addMembers.add(pickedDn);
+    state.pendingChanges.removeMembers.delete(pickedDn);
+    const list = document.getElementById('membersList');
+    if (list && !list.querySelector(`[data-memberdn="${cssEscapeValue(pickedDn)}"]`)) {
+      list.querySelector('.text-muted')?.remove();
+      list.insertAdjacentHTML('beforeend', renderPendingMemberEntry(pickedDn, true));
+      bindModalActions();
+    }
+    addMemberModal.hide();
     showToast('Dodano do zmian oczekujących');
   }));
 });
@@ -918,12 +1243,21 @@ applyObjectChangesBtn.addEventListener('click', async () => {
     const operations = [];
     const addDns = Array.from(state.pendingChanges?.addGroups || []);
     const removeDns = Array.from(state.pendingChanges?.removeGroups || []);
+    const addMemberDns = Array.from(state.pendingChanges?.addMembers || []);
+    const removeMemberDns = Array.from(state.pendingChanges?.removeMembers || []);
     const moveTargetDn = state.pendingChanges?.moveTargetDn;
 
     if (addDns.length || removeDns.length) {
       operations.push(api('/api/user/groups', {
         method: 'POST',
         body: JSON.stringify({ userDn: state.currentObjectDn, addDns, removeDns })
+      }));
+    }
+
+    if (addMemberDns.length || removeMemberDns.length) {
+      operations.push(api('/api/group/members', {
+        method: 'POST',
+        body: JSON.stringify({ groupDn: state.currentObjectDn, addMemberDns, removeMemberDns })
       }));
     }
 
@@ -1000,6 +1334,11 @@ function cssEscapeValue(value) {
   if (window.CSS?.escape) return window.CSS.escape(value);
   return String(value).replaceAll('"', '\\"');
 }
+
+document.querySelectorAll('[data-bs-toggle="popover"]').forEach((el) => {
+  // eslint-disable-next-line no-new
+  new bootstrap.Popover(el, { trigger: 'click', html: true });
+});
 
 bindOuPickers();
 loadDashboardStats();

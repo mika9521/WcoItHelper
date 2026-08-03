@@ -4,15 +4,18 @@ const {
   searchObjectsInOu,
   getObjectDetails,
   updateUserGroups,
+  updateGroupMembers,
   copyGroupsFromReference,
   moveObject,
   createUser,
   createGroup,
   setAccountEnabled,
   softDeleteAccount,
+  unlockAccount,
   updateUserSettings,
   listOuChildren,
-  getDashboardStats
+  getDashboardStats,
+  getBitlockerKeys
 } = require('../services/ad/adService');
 const { staleLogons } = require('../services/reports/reportService');
 const {
@@ -120,6 +123,31 @@ router.post('/api/user/groups', async (req, res) => {
   }
 });
 
+router.post('/api/group/members', async (req, res) => {
+  try {
+    const { groupDn, addMemberDns = [], removeMemberDns = [] } = req.body;
+    await updateGroupMembers(groupDn, addMemberDns, removeMemberDns, adAuthFromRequest(req));
+    await audit(req, {
+      action: 'group_members_update',
+      status: 'success',
+      scopeType: 'group',
+      scopeDn: groupDn,
+      message: 'Aktualizacja członków grupy',
+      details: { added: addMemberDns, removed: removeMemberDns }
+    });
+    res.json({ updated: true });
+  } catch (error) {
+    await audit(req, {
+      action: 'group_members_update',
+      status: 'error',
+      scopeType: 'group',
+      scopeDn: req.body?.groupDn || '',
+      message: error.message
+    });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
 router.post('/api/user/groups/copy', async (req, res) => {
   try {
     const { targetUserDn, referenceUserDn, selectedGroups } = req.body;
@@ -221,6 +249,30 @@ router.post('/api/object/soft-delete', async (req, res) => {
   }
 });
 
+router.post('/api/object/unlock', async (req, res) => {
+  try {
+    const { objectDn, targetOuDn } = req.body;
+    const result = await unlockAccount(objectDn, targetOuDn, adAuthFromRequest(req));
+    await audit(req, {
+      action: 'account_unlock',
+      status: 'success',
+      scopeDn: objectDn,
+      targetDn: targetOuDn,
+      message: 'Odblokowanie konta (włączenie + przeniesienie z OU zablokowane_konta)'
+    });
+    res.json(result);
+  } catch (error) {
+    await audit(req, {
+      action: 'account_unlock',
+      status: 'error',
+      scopeDn: req.body?.objectDn || '',
+      targetDn: req.body?.targetOuDn || '',
+      message: error.message
+    });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
 router.post('/api/user/settings', async (req, res) => {
   try {
     const { objectDn, ...payload } = req.body;
@@ -287,6 +339,30 @@ router.get('/api/ou-children', async (req, res) => {
       action: 'ou_children_list',
       status: 'error',
       scopeDn: req.query?.parentDn || '',
+      message: error.message
+    });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.get('/api/computer/bitlocker', async (req, res) => {
+  try {
+    const dn = req.query.dn;
+    const rows = await getBitlockerKeys(dn, adAuthFromRequest(req));
+    await audit(req, {
+      action: 'bitlocker_keys_view',
+      status: 'success',
+      scopeType: 'computer',
+      scopeDn: dn || '',
+      message: 'Podgląd kluczy BitLocker',
+      details: { count: rows.length }
+    });
+    res.json(rows);
+  } catch (error) {
+    await audit(req, {
+      action: 'bitlocker_keys_view',
+      status: 'error',
+      scopeDn: req.query?.dn || '',
       message: error.message
     });
     res.status(error.status || 500).json({ message: error.message });

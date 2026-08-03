@@ -135,6 +135,17 @@ async function updateUserGroups(userDn, addDns = [], removeDns = [], authContext
   });
 }
 
+async function updateGroupMembers(groupDn, addMemberDns = [], removeMemberDns = [], authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
+    for (const memberDn of addMemberDns) {
+      await client.modify(groupDn, toChange('add', 'member', memberDn));
+    }
+    for (const memberDn of removeMemberDns) {
+      await client.modify(groupDn, toChange('delete', 'member', memberDn));
+    }
+  });
+}
+
 async function copyGroupsFromReference(targetUserDn, referenceUserDn, selectedGroups, authContext = null) {
   const groups = selectedGroups.filter(Boolean);
   await updateUserGroups(targetUserDn, groups, [], authContext);
@@ -264,6 +275,14 @@ async function softDeleteAccount(objectDn, authContext = null) {
   });
 }
 
+async function unlockAccount(objectDn, targetOuDn, authContext = null) {
+  if (!targetOuDn) throw new AppError('Nie wybrano docelowego OU', 400);
+  await setAccountEnabled(objectDn, true, authContext);
+  const rdn = objectDn.split(',')[0];
+  await moveObject(objectDn, targetOuDn, authContext);
+  return { updated: true, movedTo: targetOuDn, dn: `${rdn},${targetOuDn}` };
+}
+
 function toWindowsFileTime(dateValue, endOfDay = false) {
   const date = new Date(dateValue);
   if (Number.isNaN(date.getTime())) return null;
@@ -344,6 +363,28 @@ async function updateUserSettings(objectDn, payload = {}, authContext = null) {
   });
 }
 
+async function getBitlockerKeys(computerDn, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(computerDn, {
+      scope: 'one',
+      filter: '(objectClass=msFVE-RecoveryInformation)',
+      attributes: ['msFVE-RecoveryPassword', 'msFVE-RecoveryGuid', 'name', 'whenCreated', 'distinguishedName']
+    });
+
+    return searchEntries.map((entry) => {
+      const pick = (value) => (Array.isArray(value) ? value[0] : value);
+      const guidRaw = pick(entry['msFVE-RecoveryGuid']);
+      return {
+        dn: entry.dn || pick(entry.distinguishedName) || '',
+        name: pick(entry.name) || '',
+        recoveryPassword: pick(entry['msFVE-RecoveryPassword']) || '',
+        recoveryGuid: Buffer.isBuffer(guidRaw) ? guidRaw.toString('hex') : String(guidRaw || ''),
+        whenCreated: pick(entry.whenCreated) || ''
+      };
+    });
+  });
+}
+
 async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false, authContext = null) {
   const filter = onlyOu
     ? '(|(objectClass=organizationalUnit)(objectClass=container))'
@@ -419,13 +460,16 @@ module.exports = {
   searchObjectsInOu,
   getObjectDetails,
   updateUserGroups,
+  updateGroupMembers,
   copyGroupsFromReference,
   moveObject,
   createUser,
   createGroup,
   setAccountEnabled,
   softDeleteAccount,
+  unlockAccount,
   updateUserSettings,
   listOuChildren,
-  getDashboardStats
+  getDashboardStats,
+  getBitlockerKeys
 };

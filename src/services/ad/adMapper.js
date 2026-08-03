@@ -31,6 +31,7 @@ function normalizeObject(entry) {
     sn: pickFirst(entry.sn),
     givenName: pickFirst(entry.givenName),
     memberOf: Array.isArray(entry.memberOf) ? entry.memberOf : entry.memberOf ? [entry.memberOf] : [],
+    member: Array.isArray(entry.member) ? entry.member : entry.member ? [entry.member] : [],
     distinguishedName: pickFirst(entry.distinguishedName) || dn,
     description: pickFirst(entry.description),
     userAccountControl: pickFirst(entry.userAccountControl),
