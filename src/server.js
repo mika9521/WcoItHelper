@@ -20,6 +20,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/bootstrap', express.static(path.join(__dirname, '..', 'node_modules', 'bootstrap', 'dist')));
+app.use('/vendor/jspdf', express.static(path.join(__dirname, '..', 'node_modules', 'jspdf', 'dist')));
 app.use(session({
   secret: env.sessionSecret,
   resave: false,
@@ -33,5 +34,5 @@ app.use(ensureAuth, adRoutes);
 
 app.listen(env.port, () => {
   // eslint-disable-next-line no-console
-  console.log(`AD Portal działa: http://localhost:${env.port}`);
+  console.log(`Portal Zarządzania AD działa: http://localhost:${env.port}`);
 });

@@ -1,3 +1,377 @@
+/* ===== System projektowy portalu ===== */
+:root {
+  --accent: #4f46e5;
+  --accent-rgb: 79, 70, 229;
+  --accent-hover: #4338ca;
+  --accent-active: #3730a3;
+  --accent-soft: rgba(79, 70, 229, 0.1);
+
+  --ink-900: #0f172a;
+  --ink-700: #334155;
+  --ink-500: #64748b;
+  --ink-300: #cbd5e1;
+  --ink-100: #eef1f6;
+
+  --app-bg: #eef1f6;
+  --app-card-radius: 0.75rem;
+  --app-card-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 10px rgba(15, 23, 42, 0.05);
+  --app-card-shadow-hover: 0 2px 4px rgba(15, 23, 42, 0.08), 0 8px 20px rgba(15, 23, 42, 0.08);
+
+  --bs-link-color: var(--accent);
+  --bs-link-hover-color: var(--accent-hover);
+}
+
+body {
+  background: var(--app-bg);
+  color: var(--ink-900);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Retint Bootstrap's hardcoded "primary blue" to the portal's accent color
+   (Bootstrap bakes the hex directly into these component-scoped custom
+   properties, so a plain :root override does not reach them). */
+.btn-primary {
+  --bs-btn-bg: var(--accent);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-bg: var(--accent-hover);
+  --bs-btn-hover-border-color: var(--accent-hover);
+  --bs-btn-active-bg: var(--accent-active);
+  --bs-btn-active-border-color: var(--accent-active);
+  --bs-btn-disabled-bg: var(--accent);
+  --bs-btn-disabled-border-color: var(--accent);
+  --bs-btn-focus-shadow-rgb: var(--accent-rgb);
+}
+.btn-outline-primary {
+  --bs-btn-color: var(--accent);
+  --bs-btn-border-color: var(--accent);
+  --bs-btn-hover-bg: var(--accent);
+  --bs-btn-hover-border-color: var(--accent);
+  --bs-btn-active-bg: var(--accent);
+  --bs-btn-active-border-color: var(--accent);
+  --bs-btn-disabled-color: var(--accent);
+  --bs-btn-disabled-border-color: var(--accent);
+  --bs-btn-focus-shadow-rgb: var(--accent-rgb);
+}
+.nav-pills {
+  --bs-nav-pills-link-active-bg: var(--accent);
+}
+.list-group {
+  --bs-list-group-active-bg: var(--accent);
+  --bs-list-group-active-border-color: var(--accent);
+}
+.form-control:focus,
+.form-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.25rem var(--accent-soft);
+}
+.form-check-input:checked {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+.form-check-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 0.25rem var(--accent-soft);
+}
+
+main.container,
+.app-main {
+  max-width: 1200px;
+}
+
+/* ===== Układ: boczna nawigacja + treść ===== */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  align-items: stretch;
+}
+
+.app-sidebar {
+  flex: 0 0 240px;
+  width: 240px;
+  background: linear-gradient(180deg, #111827 0%, #1e2433 100%);
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 1.25rem 1rem;
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.15);
+  z-index: 10;
+}
+
+.app-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.25rem 0.4rem 1.25rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 1rem;
+}
+.app-sidebar-brand-icon {
+  flex: 0 0 auto;
+  width: 2.1rem;
+  height: 2.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.app-sidebar-brand-text {
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.app-sidebar-nav {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.app-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.55rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.app-nav-link:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.app-nav-link.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(var(--accent-rgb), 0.5);
+}
+.app-sidebar-user {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.app-user-avatar {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.app-user-info {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.app-user-name {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app-logout-btn {
+  border: none;
+  background: none;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  padding: 0;
+  text-decoration: underline;
+}
+.app-logout-btn:hover {
+  color: #fff;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 1.75rem 2rem;
+}
+
+@media (max-width: 860px) {
+  .app-shell {
+    flex-direction: column;
+  }
+  .app-sidebar {
+    position: static;
+    height: auto;
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+  }
+  .app-sidebar-brand {
+    border-bottom: none;
+    margin-bottom: 0;
+    padding: 0;
+    flex: 1 1 auto;
+  }
+  .app-sidebar-nav {
+    flex-direction: row;
+    flex: 1 1 100%;
+    order: 3;
+  }
+  .app-sidebar-user {
+    margin-top: 0;
+    border-top: none;
+    padding-top: 0;
+    flex: 0 0 auto;
+  }
+  .app-main {
+    padding: 1.25rem;
+  }
+}
+
+.card {
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: var(--app-card-radius);
+  box-shadow: var(--app-card-shadow);
+}
+.card-header {
+  background-color: rgba(15, 23, 42, 0.02);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  font-weight: 600;
+  border-top-left-radius: var(--app-card-radius) !important;
+  border-top-right-radius: var(--app-card-radius) !important;
+}
+
+.stat-card {
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  border-radius: var(--app-card-radius);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: var(--app-card-shadow);
+}
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--app-card-shadow-hover);
+}
+.stat-card .card-body {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+.stat-icon {
+  flex: 0 0 auto;
+  width: 0.45rem;
+  height: 2.4rem;
+  border-radius: 0.25rem;
+  background: var(--accent);
+}
+.stat-card .h4 {
+  font-weight: 700;
+  color: var(--ink-900);
+}
+
+#resultsTable thead th {
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  background-color: rgba(15, 23, 42, 0.02);
+}
+#resultsTable tbody tr {
+  transition: background-color 0.1s ease;
+}
+
+.list-group-item.report-link.active {
+  background-color: var(--accent);
+  border-color: var(--accent);
+}
+
+.modal-content {
+  border: none;
+  border-radius: 0.9rem;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
+}
+.modal-header {
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+.modal-footer {
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+/* Segmented "pill" look for the tabs generated inside object modals
+   (tabsTemplate() in app.js emits standard Bootstrap nav-tabs markup). */
+#objectBody .nav-tabs {
+  border-bottom: none;
+  background: var(--ink-100);
+  padding: 0.25rem;
+  border-radius: 0.6rem;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+#objectBody .nav-tabs .nav-link {
+  border: none;
+  border-radius: 0.45rem;
+  color: var(--ink-700);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 0.4rem 0.85rem;
+}
+#objectBody .nav-tabs .nav-link:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+#objectBody .nav-tabs .nav-link.active {
+  background: #fff;
+  color: var(--accent);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+#objectBody .tab-content {
+  border: none !important;
+}
+
+.btn {
+  transition: transform 0.05s ease, box-shadow 0.15s ease;
+}
+.btn:active {
+  transform: translateY(1px);
+}
+
+.type-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.6rem;
+  padding: 0 0.35rem;
+  border-radius: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--ink-500);
+}
+.type-badge-user { background: #2563eb; }
+.type-badge-computer { background: #475569; }
+.type-badge-group { background: var(--accent); }
+.type-badge-ou { background: #b45309; }
+
 .object-pill { cursor: pointer; }
 pre.json-view {
   background: #f8f9fa;
@@ -62,4 +436,53 @@ pre.json-view {
 .modal.show .modal-dialog {
   transform: translateY(0) scale(1);
   opacity: 1;
+}
+
+.legend-help-btn {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  line-height: 1;
+  font-weight: 700;
+}
+.legend-popover-body {
+  max-width: 320px;
+}
+.legend-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.legend-row:last-child {
+  margin-bottom: 0;
+}
+.legend-row > span:last-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.legend-swatch {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.15rem;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  display: inline-block;
+  background-color: #fff;
+}
+.legend-swatch.table-warning {
+  background-color: #fff3cd;
+}
+.legend-swatch.table-danger {
+  background-color: #f8d7da;
+}
+
+/* When a second (or deeper) modal opens on top of another, Bootstrap stacks an
+   extra .modal-backdrop for it. Blurring/darkening that top backdrop visually
+   dims and blurs everything behind it, including the first modal. */
+.modal-backdrop.show ~ .modal-backdrop.show {
+  --bs-backdrop-opacity: 0.75;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }

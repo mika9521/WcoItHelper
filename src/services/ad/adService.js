@@ -1,3 +1,4 @@
+const { X509Certificate } = require('crypto');
 const env = require('../../config/env');
 const { Change, Attribute } = require('ldapts');
 const { AppError } = require('../../utils/errors');
@@ -9,6 +10,10 @@ const DEFAULT_ATTRS = [
   'whenCreated', 'lastLogonTimestamp', 'lastLogon', 'distinguishedName', 'description', 'memberOf', 'objectClass', 'objectCategory', 'sn', 'givenName', 'userAccountControl', 'name', 'ou'
 ];
 const BLOCKED_ACCOUNTS_OU_DN = 'OU=zablokowane_konta,DC=eskulap,DC=local';
+// Some domain controllers reject accountExpires="0" for "never expires" with
+// "Error in attribute conversion operation ... Code: 0x15"; the canonical
+// Int64 max sentinel is universally accepted instead.
+const ACCOUNT_NEVER_EXPIRES = '9223372036854775807';
 
 function toChange(operation, attribute, values) {
   const list = Array.isArray(values) ? values : [values];
@@ -135,6 +140,17 @@ async function updateUserGroups(userDn, addDns = [], removeDns = [], authContext
   });
 }
 
+async function updateGroupMembers(groupDn, addMemberDns = [], removeMemberDns = [], authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
+    for (const memberDn of addMemberDns) {
+      await client.modify(groupDn, toChange('add', 'member', memberDn));
+    }
+    for (const memberDn of removeMemberDns) {
+      await client.modify(groupDn, toChange('delete', 'member', memberDn));
+    }
+  });
+}
+
 async function copyGroupsFromReference(targetUserDn, referenceUserDn, selectedGroups, authContext = null) {
   const groups = selectedGroups.filter(Boolean);
   await updateUserGroups(targetUserDn, groups, [], authContext);
@@ -165,7 +181,10 @@ async function createUser(payload, authContext = null) {
     accountExpiresDate
   } = payload;
 
-  const cn = `${firstName} ${lastName}`;
+  // The AD object name (cn/RDN) is set to the login rather than the full
+  // name, so admins no longer have to rename the object after creation.
+  const cn = login;
+  const displayName = `${firstName} ${lastName}`;
   const dn = `CN=${cn},${ouDn}`;
   const domain = env.ad.baseDn
     .split(',')
@@ -178,7 +197,7 @@ async function createUser(payload, authContext = null) {
       cn,
       givenName: firstName,
       sn: lastName,
-      displayName: cn,
+      displayName,
       sAMAccountName: login,
       userPrincipalName: `${login}@${domain}`,
       description
@@ -207,7 +226,7 @@ async function createUser(payload, authContext = null) {
       if (!fileTime) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
       await client.modify(dn, toChange('replace', 'accountExpires', fileTime));
     } else {
-      await client.modify(dn, toChange('replace', 'accountExpires', '0'));
+      await client.modify(dn, toChange('replace', 'accountExpires', ACCOUNT_NEVER_EXPIRES));
     }
 
     return { dn, login };
@@ -227,6 +246,52 @@ function escapeFilter(value = '') {
     .replace(/\0/g, '\\00');
 }
 
+const POLISH_CHAR_MAP = {
+  ą: 'a', ć: 'c', ę: 'e', ł: 'l', ń: 'n', ó: 'o', ś: 's', ź: 'z', ż: 'z',
+  Ą: 'a', Ć: 'c', Ę: 'e', Ł: 'l', Ń: 'n', Ó: 'o', Ś: 's', Ź: 'z', Ż: 'z'
+};
+
+function transliteratePolish(text) {
+  return String(text || '').split('').map((ch) => POLISH_CHAR_MAP[ch] ?? ch).join('');
+}
+
+function sanitizeLoginPart(text) {
+  return transliteratePolish(text).toLowerCase().replace(/[^a-z]/g, '');
+}
+
+async function isSamAccountNameTaken(login, authContext = null) {
+  if (!login) return true;
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(env.ad.baseDn, {
+      scope: 'sub',
+      sizeLimit: 1,
+      filter: `(sAMAccountName=${escapeFilter(login)})`,
+      attributes: ['dn']
+    });
+    return searchEntries.length > 0;
+  });
+}
+
+async function suggestLogin(firstName, lastName, authContext = null) {
+  const last = sanitizeLoginPart(lastName);
+  const first = sanitizeLoginPart(firstName);
+  if (!last || !first) return { login: '', available: false };
+
+  const candidates = [];
+  for (let len = 1; len <= first.length; len += 1) {
+    candidates.push(`${last}.${first.slice(0, len)}`);
+  }
+  for (let suffix = 2; suffix <= 20; suffix += 1) {
+    candidates.push(`${last}.${first}${suffix}`);
+  }
+
+  for (const candidate of candidates) {
+    // eslint-disable-next-line no-await-in-loop
+    const taken = await isSamAccountNameTaken(candidate, authContext);
+    if (!taken) return { login: candidate, available: true };
+  }
+  return { login: candidates[candidates.length - 1] || '', available: false };
+}
 
 async function setAccountEnabled(objectDn, enabled, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
@@ -262,6 +327,14 @@ async function softDeleteAccount(objectDn, authContext = null) {
 
     return { updated: true, movedTo: BLOCKED_ACCOUNTS_OU_DN };
   });
+}
+
+async function unlockAccount(objectDn, targetOuDn, authContext = null) {
+  if (!targetOuDn) throw new AppError('Nie wybrano docelowego OU', 400);
+  await setAccountEnabled(objectDn, true, authContext);
+  const rdn = objectDn.split(',')[0];
+  await moveObject(objectDn, targetOuDn, authContext);
+  return { updated: true, movedTo: targetOuDn, dn: `${rdn},${targetOuDn}` };
 }
 
 function toWindowsFileTime(dateValue, endOfDay = false) {
@@ -333,13 +406,95 @@ async function updateUserSettings(objectDn, payload = {}, authContext = null) {
       if (!fileTime) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
       modifications.push(toChange('replace', 'accountExpires', fileTime));
     } else if (accountExpiresMode === 'never') {
-      modifications.push(toChange('replace', 'accountExpires', '0'));
+      modifications.push(toChange('replace', 'accountExpires', ACCOUNT_NEVER_EXPIRES));
     }
 
     for (const mod of modifications) {
       await client.modify(objectDn, mod);
     }
 
+    return { updated: true };
+  });
+}
+
+async function getBitlockerKeys(computerDn, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(computerDn, {
+      scope: 'one',
+      filter: '(objectClass=msFVE-RecoveryInformation)',
+      attributes: ['msFVE-RecoveryPassword', 'msFVE-RecoveryGuid', 'name', 'whenCreated', 'distinguishedName']
+    });
+
+    return searchEntries.map((entry) => {
+      const pick = (value) => (Array.isArray(value) ? value[0] : value);
+      const guidRaw = pick(entry['msFVE-RecoveryGuid']);
+      return {
+        dn: entry.dn || pick(entry.distinguishedName) || '',
+        name: pick(entry.name) || '',
+        recoveryPassword: pick(entry['msFVE-RecoveryPassword']) || '',
+        recoveryGuid: Buffer.isBuffer(guidRaw) ? guidRaw.toString('hex') : String(guidRaw || ''),
+        whenCreated: pick(entry.whenCreated) || ''
+      };
+    });
+  });
+}
+
+function extractCertificateCn(subject) {
+  const match = String(subject || '').match(/^CN=(.+)$/m);
+  return match ? match[1] : '';
+}
+
+async function getUserCertificates(userDn, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(userDn, {
+      scope: 'base',
+      attributes: ['userCertificate']
+    });
+    if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
+
+    const raw = searchEntries[0].userCertificate;
+    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+
+    return list.map((value, index) => {
+      const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      try {
+        const cert = new X509Certificate(buffer);
+        return {
+          index,
+          subject: cert.subject,
+          subjectCn: extractCertificateCn(cert.subject),
+          issuer: cert.issuer,
+          issuerCn: extractCertificateCn(cert.issuer),
+          validFrom: cert.validFrom,
+          validTo: cert.validTo,
+          serialNumber: cert.serialNumber,
+          fingerprint256: cert.fingerprint256,
+          raw: buffer.toString('base64')
+        };
+      } catch (error) {
+        return {
+          index,
+          subject: 'Nie udało się odczytać certyfikatu',
+          subjectCn: '',
+          issuer: '',
+          issuerCn: '',
+          validFrom: '',
+          validTo: '',
+          serialNumber: '',
+          fingerprint256: '',
+          raw: buffer.toString('base64'),
+          parseError: error.message
+        };
+      }
+    });
+  });
+}
+
+async function revokeUserCertificate(userDn, certificateBase64, authContext = null) {
+  if (!certificateBase64) throw new AppError('Brak danych certyfikatu do odwołania', 400);
+  const buffer = Buffer.from(certificateBase64, 'base64');
+  return withAdaptiveBind(authContext, async (client) => {
+    await client.modify(userDn, toChange('delete', 'userCertificate', buffer));
     return { updated: true };
   });
 }
@@ -419,13 +574,20 @@ module.exports = {
   searchObjectsInOu,
   getObjectDetails,
   updateUserGroups,
+  updateGroupMembers,
   copyGroupsFromReference,
   moveObject,
   createUser,
   createGroup,
   setAccountEnabled,
   softDeleteAccount,
+  unlockAccount,
   updateUserSettings,
   listOuChildren,
-  getDashboardStats
+  getDashboardStats,
+  getBitlockerKeys,
+  isSamAccountNameTaken,
+  suggestLogin,
+  getUserCertificates,
+  revokeUserCertificate
 };

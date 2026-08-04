@@ -7,9 +7,13 @@ Modularny portal do zarządzania AD pod środowisko szpitalne:
 - wyszukiwarka obiektów (użytkownicy/komputery/grupy),
 - osobne modale dla różnych typów obiektów,
 - zarządzanie `memberOf` (dodawanie grup, kopiowanie zaznaczonych grup od użytkownika referencyjnego),
+- zarządzanie członkami grupy (dodawanie/usuwanie kont bezpośrednio z poziomu obiektu grupy),
 - przenoszenie obiektu do OU,
 - kreator nowego użytkownika,
+- podgląd i eksport (PDF / schowek) kluczy odzyskiwania BitLocker dla komputerów,
+- odblokowywanie kont przeniesionych do OU zablokowane_konta (z wyborem docelowego OU),
 - zakładka raportów (np. logowania starsze niż X lat),
+- szczegółowe logi zmian (kto, co i jakie wartości zmienił),
 - toasty i modale w UI,
 - **działanie offline UI** z pełnym Bootstrapem dostarczonym lokalnie z `node_modules/bootstrap/dist` (bez CDN).
 
