@@ -9,7 +9,7 @@ Modularny portal do zarządzania AD pod środowisko szpitalne:
 - zarządzanie `memberOf` (dodawanie grup, kopiowanie zaznaczonych grup od użytkownika referencyjnego),
 - zarządzanie członkami grupy (dodawanie/usuwanie kont bezpośrednio z poziomu obiektu grupy),
 - przenoszenie obiektu do OU,
-- kreator nowego użytkownika w 3 krokach: typ konta, dane użytkownika, uprawnienia (opcjonalnie na wzór istniejącego konta: kopiuje OU i grupy; login generowany automatycznie w formacie `nazwisko.i`, edytowalny; obiekt w AD nazywa się tak jak login),
+- kreator nowego użytkownika w 4 krokach: typ konta, dane użytkownika, uprawnienia, podsumowanie (opcjonalnie na wzór istniejącego konta: kopiuje OU i grupy; login generowany automatycznie w formacie `nazwisko.i`, edytowalny; obiekt w AD nazywa się tak jak login),
 - wybór OU z drzewem katalogu i wyszukiwarką OU,
 - ustawienia: słownik uprawnień użytkowników mapowanych na grupy AD (plik `data/permissions.json`), używany w kroku 3 kreatora,
 - podgląd i eksport (PDF / schowek) kluczy odzyskiwania BitLocker dla komputerów,

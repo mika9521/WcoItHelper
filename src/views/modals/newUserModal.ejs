@@ -15,6 +15,7 @@
         <li class="wizard-step active" data-step="1"><span class="wizard-step-num">1</span><span class="wizard-step-label">Typ użytkownika</span></li>
         <li class="wizard-step" data-step="2"><span class="wizard-step-num">2</span><span class="wizard-step-label">Informacje o użytkowniku</span></li>
         <li class="wizard-step" data-step="3"><span class="wizard-step-num">3</span><span class="wizard-step-label">Uprawnienia użytkownika</span></li>
+        <li class="wizard-step" data-step="4"><span class="wizard-step-num">4</span><span class="wizard-step-label">Podsumowanie</span></li>
       </ol>
 
       <div class="modal-body">
@@ -200,12 +201,17 @@
         </div>
 
 
-              <div class="perm-summary mt-3">
-                <div class="form-section-title mb-2">Podsumowanie</div>
-                <div class="small" id="newUserSummary"></div>
-              </div>
             </div>
           </div>
+        </div>
+
+        <!-- Krok 4: podsumowanie -->
+        <div class="wizard-pane d-none" data-pane="4">
+          <div class="alert alert-info small d-flex align-items-center gap-2 mb-3">
+            <svg class="icon"><use href="#i-info"/></svg>
+            <span>Sprawdź dane. Konto zostanie utworzone dopiero po kliknięciu <strong>Utwórz użytkownika</strong>.</span>
+          </div>
+          <div id="newUserFinalSummary"></div>
         </div>
       </div>
 

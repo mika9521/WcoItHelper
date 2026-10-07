@@ -2004,9 +2004,9 @@ function updateNewUserSubmitState() {
   const step = state.newUser.step || 1;
   const nextBtn = document.getElementById('newUserNextBtn');
   if (step === 1) nextBtn.disabled = !newUserForm.querySelector('input[name="userType"]:checked');
-  if (step === 2) nextBtn.disabled = !isNewUserInfoValid();
-  newUserSubmitBtn.disabled = step !== 3 || !isNewUserInfoValid();
-  if (step === 3) renderNewUserSummary();
+  if (step === 2 || step === 3) nextBtn.disabled = !isNewUserInfoValid();
+  newUserSubmitBtn.disabled = step !== WIZARD_LAST_STEP || !isNewUserInfoValid();
+  if (step === WIZARD_LAST_STEP) renderNewUserSummary();
 }
 
 function setNewUserLoginState(kind, message) {
@@ -2158,7 +2158,7 @@ document.getElementById('newUserMustChangePwd').addEventListener('change', (even
 
 function renderNewUserGroups() {
   updateReferenceGroupsButton();
-  if (state.newUser.step === 3) renderNewUserSummary();
+  if (state.newUser.step === WIZARD_LAST_STEP) renderNewUserSummary();
   const groups = Array.from(state.newUser.groups);
   document.getElementById('newUserGroupsCount').textContent = String(groups.length);
   if (!groups.length) {
@@ -2269,8 +2269,8 @@ newUserModalEl.addEventListener('shown.bs.modal', () => newUserForm.querySelecto
 
 newUserForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  // Enter in a step-1/2 field means "next", not "create".
-  if (state.newUser.step !== 3) {
+  // Enter in an earlier step means "next", not "create".
+  if (state.newUser.step !== WIZARD_LAST_STEP) {
     goNewUserNext();
     return;
   }
@@ -2318,7 +2318,8 @@ document.querySelectorAll('input[name="accountExpiresModeNewUser"]').forEach((ra
 });
 
 // ----- Kroki kreatora -----
-const WIZARD_NEXT_LABELS = { 1: 'Informacje o użytkowniku', 2: 'Uprawnienia użytkownika' };
+const WIZARD_NEXT_LABELS = { 1: 'Informacje o użytkowniku', 2: 'Uprawnienia użytkownika', 3: 'Podsumowanie' };
+const WIZARD_LAST_STEP = 4;
 
 function showNewUserStep(step) {
   state.newUser.step = step;
@@ -2329,12 +2330,13 @@ function showNewUserStep(step) {
     li.classList.toggle('done', n < step);
   });
   document.getElementById('newUserBackBtn').classList.toggle('d-none', step === 1);
-  document.getElementById('newUserNextBtn').classList.toggle('d-none', step === 3);
-  newUserSubmitBtn.classList.toggle('d-none', step !== 3);
+  document.getElementById('newUserNextBtn').classList.toggle('d-none', step === WIZARD_LAST_STEP);
+  newUserSubmitBtn.classList.toggle('d-none', step !== WIZARD_LAST_STEP);
   if (WIZARD_NEXT_LABELS[step]) document.getElementById('newUserNextLabel').textContent = WIZARD_NEXT_LABELS[step];
   newUserModalEl.querySelector('.modal-body').scrollTop = 0;
   updateNewUserSubmitState();
   if (step === 2) setTimeout(() => newUserFirstName.focus(), 50);
+  if (step === WIZARD_LAST_STEP) setTimeout(() => newUserSubmitBtn.focus(), 50);
   if (step === 3) {
     renderNewUserPermissions();
     setTimeout(() => document.getElementById('newUserPermSearch').focus(), 50);
@@ -2344,8 +2346,8 @@ function showNewUserStep(step) {
 function goNewUserNext() {
   const step = state.newUser.step;
   if (step === 1 && newUserForm.querySelector('input[name="userType"]:checked')) showNewUserStep(2);
-  else if (step === 2) {
-    if (isNewUserInfoValid()) showNewUserStep(3);
+  else if (step === 2 || step === 3) {
+    if (isNewUserInfoValid()) showNewUserStep(step + 1);
     else showToast('Uzupełnij imię, nazwisko, dostępny login, hasło i OU', true);
   }
 }
@@ -2447,21 +2449,106 @@ function newUserResultingGroups() {
   return [...map.values()];
 }
 
-function renderNewUserSummary() {
-  const holder = document.getElementById('newUserSummary');
-  if (!holder) return;
-  const groups = newUserResultingGroups().sort((a, b) => dnLabel(a).localeCompare(dnLabel(b), 'pl'));
-  const login = newUserLogin.value.trim();
-  holder.innerHTML = `
-    <dl class="cert-summary mb-2">
-      <dt>Użytkownik</dt><dd>${escapeHtml(`${newUserFirstName.value.trim()} ${newUserLastName.value.trim()}`.trim() || '-')}</dd>
-      <dt>Login</dt><dd class="font-monospace">${escapeHtml(login || '-')}</dd>
-      <dt>OU</dt><dd>${newUserOuDn.value ? `<span class="path-inline">${dnToPathHtml(newUserOuDn.value, { skipDomain: true })}</span>` : '-'}</dd>
-      <dt>Uprawnienia</dt><dd>${state.newUser.permissions.size}</dd>
-      <dt>Grupy AD</dt><dd>${groups.length}</dd>
-    </dl>
-    ${groups.length ? `<div class="chip-list">${groups.map((g) => `<span class="chip chip-sm" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}</span>`).join('')}</div>` : '<div class="text-muted">Konto zostanie utworzone bez dodatkowych grup.</div>'}`;
+const USER_TYPE_LABELS = { 'eskulap-domain': 'Użytkownik domeny Eskulap' };
+
+function summaryRow(label, valueHtml) {
+  return `<dt>${escapeHtml(label)}</dt><dd>${valueHtml || '<span class="text-muted">—</span>'}</dd>`;
 }
+
+function summarySection(title, step, bodyHtml) {
+  return `
+    <section class="summary-section">
+      <div class="summary-section-head">
+        <span class="summary-section-title">${escapeHtml(title)}</span>
+        <button type="button" class="btn btn-sm btn-link px-0 summary-edit" data-goto-step="${step}">Zmień</button>
+      </div>
+      ${bodyHtml}
+    </section>`;
+}
+
+function yesNo(on, yes = 'Tak', no = 'Nie') {
+  return on ? `<span class="summary-flag on">${icon('check')} ${escapeHtml(yes)}</span>` : `<span class="summary-flag">${escapeHtml(no)}</span>`;
+}
+
+function renderNewUserSummary() {
+  const holder = document.getElementById('newUserFinalSummary');
+  if (!holder) return;
+  const val = (name) => newUserForm.querySelector(`[name="${name}"]`);
+  const checked = (id) => document.getElementById(id).checked;
+  const userType = newUserForm.querySelector('input[name="userType"]:checked')?.value || '';
+  const first = newUserFirstName.value.trim();
+  const last = newUserLastName.value.trim();
+  const login = newUserLogin.value.trim();
+  const ouDn = newUserOuDn.value;
+  const expiresMode = newUserForm.querySelector('input[name="accountExpiresModeNewUser"]:checked')?.value || 'never';
+  const expiresDate = val('accountExpiresDate').value;
+  const description = val('description').value.trim();
+  const refName = state.newUser.referenceDn ? document.getElementById('newUserReferenceName').textContent : '';
+
+  const selectedPerms = (state.permissionCatalog || []).filter((p) => state.newUser.permissions.has(p.id));
+  const permGroupKeys = new Set(selectedPerms.flatMap((p) => p.groups.map((g) => g.dn.toLowerCase())));
+  const extraGroups = [...state.newUser.groups].filter((dn) => !permGroupKeys.has(dn.toLowerCase()));
+  const allGroups = newUserResultingGroups().sort((a, b) => dnLabel(a).localeCompare(dnLabel(b), 'pl'));
+
+  const typeHtml = summarySection('Typ użytkownika', 1, `<dl class="summary-grid">${summaryRow('Typ konta', escapeHtml(USER_TYPE_LABELS[userType] || userType))}</dl>`);
+
+  const infoHtml = summarySection('Informacje o użytkowniku', 2, `
+    <dl class="summary-grid">
+      ${summaryRow('Użytkownik wzorcowy', refName ? escapeHtml(refName) : '')}
+      ${summaryRow('Imię i nazwisko', escapeHtml(`${first} ${last}`.trim()))}
+      ${summaryRow('Nazwa wyświetlana', escapeHtml(`${first} ${last}`.trim()))}
+      ${summaryRow('Login (sAMAccountName)', `<span class="font-monospace">${escapeHtml(login)}</span>`)}
+      ${summaryRow('Nazwa logowania (UPN)', AD_DOMAIN ? `<span class="font-monospace">${escapeHtml(login)}@${escapeHtml(AD_DOMAIN)}</span>` : '')}
+      ${summaryRow('Nazwa obiektu w AD', `<span class="font-monospace">${escapeHtml(login)}</span>`)}
+      ${summaryRow('Lokalizacja (OU)', ouDn ? `<span class="path-inline" title="${escapeHtml(ouDn)}">${dnToPathHtml(ouDn)}</span>` : '')}
+      ${summaryRow('Hasło', `<span class="font-monospace summary-password" data-shown="0">••••••••</span> <button type="button" class="btn btn-sm btn-link px-1 py-0 summary-show-pwd">pokaż</button>`)}
+      ${summaryRow('Opis', escapeHtml(description))}
+    </dl>
+    <div class="summary-subtitle">Opcje konta</div>
+    <dl class="summary-grid">
+      ${summaryRow('Wymuś zmianę hasła przy pierwszym logowaniu', yesNo(checked('newUserMustChangePwd')))}
+      ${summaryRow('Użytkownik nie może zmienić hasła', yesNo(checked('newUserCannotChangePwd')))}
+      ${summaryRow('Hasło nigdy nie wygasa', yesNo(checked('newUserPwdNeverExpires')))}
+      ${summaryRow('Konto wyłączone po utworzeniu', yesNo(checked('newUserAccountDisabled')))}
+      ${summaryRow('Wygasanie konta', expiresMode === 'date' && expiresDate ? `z końcem dnia ${escapeHtml(new Date(expiresDate).toLocaleDateString('pl-PL'))}` : 'nigdy')}
+    </dl>`);
+
+  const permsHtml = summarySection(`Uprawnienia (${selectedPerms.length})`, 3, `
+    ${selectedPerms.length
+      ? `<div class="summary-perms">${selectedPerms.map((p) => `
+          <div class="summary-perm">
+            <div class="summary-perm-name">${escapeHtml(p.name)}${p.category ? ` <span class="text-muted fw-normal">· ${escapeHtml(p.category)}</span>` : ''}</div>
+            <div class="perm-item-groups">${permissionGroupsLine(p)}</div>
+          </div>`).join('')}</div>`
+      : '<div class="text-muted small">Nie wybrano uprawnień.</div>'}
+    ${extraGroups.length ? `<div class="summary-subtitle">Dodatkowe grupy (${extraGroups.length})</div><div class="chip-list">${extraGroups.map((g) => `<span class="chip chip-sm" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}</span>`).join('')}</div>` : ''}`);
+
+  const groupsHtml = `
+    <section class="summary-section summary-section-total">
+      <div class="summary-section-head"><span class="summary-section-title">Konto zostanie dodane do grup AD (${allGroups.length})</span></div>
+      ${allGroups.length
+        ? `<div class="chip-list">${allGroups.map((g) => `<span class="chip chip-sm" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}</span>`).join('')}</div>`
+        : '<div class="text-muted small">Brak grup poza grupą podstawową domeny.</div>'}
+    </section>`;
+
+  holder.innerHTML = `<div class="summary-layout"><div>${typeHtml}${infoHtml}</div><div>${permsHtml}${groupsHtml}</div></div>`;
+}
+
+document.getElementById('newUserFinalSummary').addEventListener('click', (event) => {
+  const edit = event.target.closest('.summary-edit');
+  if (edit) {
+    showNewUserStep(Number(edit.dataset.gotoStep));
+    return;
+  }
+  const show = event.target.closest('.summary-show-pwd');
+  if (show) {
+    const span = show.parentElement.querySelector('.summary-password');
+    const shown = span.dataset.shown === '1';
+    span.textContent = shown ? '••••••••' : newUserPassword.value;
+    span.dataset.shown = shown ? '0' : '1';
+    show.textContent = shown ? 'pokaż' : 'ukryj';
+  }
+});
 
 // ===== Ustawienia: uprawnienia =====
 const permissionModal = new bootstrap.Modal(document.getElementById('permissionModal'));

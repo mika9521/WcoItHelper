@@ -941,3 +941,20 @@ pre.json-view {
 .chip-sm { font-size: 0.74rem; padding: 0.15rem 0.55rem; }
 #permissionsTable thead th:first-child, #permissionsTable tbody td:first-child { padding-left: 1.1rem; }
 #permissionsTable thead th:last-child, #permissionsTable tbody td:last-child { padding-right: 1.1rem; }
+
+/* ----- Kreator: podsumowanie ----- */
+.summary-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
+@media (max-width: 900px) { .summary-layout { grid-template-columns: 1fr; } }
+.summary-section { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.85rem 1rem; margin-bottom: 1rem; background: var(--surface); }
+.summary-section-total { background: var(--accent-softer); border-color: rgba(var(--accent-rgb), 0.3); }
+.summary-section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.summary-section-title { font-size: 0.72rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-500); }
+.summary-subtitle { font-size: 0.72rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-400); margin: 0.75rem 0 0.4rem; }
+.summary-grid { display: grid; grid-template-columns: minmax(150px, 40%) 1fr; gap: 0.4rem 1rem; font-size: 0.86rem; margin: 0; }
+.summary-grid dt { color: var(--ink-500); font-weight: 500; }
+.summary-grid dd { margin: 0; word-break: break-word; }
+.summary-flag { color: var(--ink-500); }
+.summary-flag.on { color: var(--success); font-weight: 600; }
+.summary-perms { display: flex; flex-direction: column; gap: 0.5rem; }
+.summary-perm { border-left: 3px solid var(--accent); padding-left: 0.6rem; }
+.summary-perm-name { font-weight: 600; font-size: 0.86rem; margin-bottom: 0.2rem; }
