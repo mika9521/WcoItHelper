@@ -49,7 +49,7 @@ const state = {
   selectedOuDn: null,
   groupPickHandler: null,
   userPickHandler: null,
-  newUser: { referenceDn: null, groups: new Set(), loginTouched: false },
+  newUser: { referenceDn: null, referenceGroups: [], groups: new Set(), loginTouched: false },
   softDeleteTargetDn: null,
   unlockTargetDn: null,
   certificates: [],
@@ -558,7 +558,9 @@ function userSettingsTemplate(data) {
   const passwordNeverExpires = isUacFlagSet(data, 0x10000);
   const accountDisabled = isUacFlagSet(data, 0x0002);
   const smartcardRequired = isUacFlagSet(data, 0x40000);
-  const userCannotChangePassword = isUacFlagSet(data, 0x0040);
+  const userCannotChangePassword = typeof data.portalUserCannotChangePassword === 'boolean'
+    ? data.portalUserCannotChangePassword
+    : isUacFlagSet(data, 0x0040);
   const accountExpiresDate = formatAccountExpiresDate(data.accountExpires);
   const expiresNever = !accountExpiresDate;
 
@@ -2033,11 +2035,42 @@ document.getElementById('generateNewUserPasswordBtn').addEventListener('click', 
   updateNewUserSubmitState();
 });
 
+// Same rules as ADUC: "must change at next logon" cannot be combined with
+// "cannot change password" or "password never expires".
+const newUserPwdOptionsHint = document.getElementById('newUserPwdOptionsHint');
+function showPwdOptionsHint(text) {
+  newUserPwdOptionsHint.textContent = text || '';
+  newUserPwdOptionsHint.classList.toggle('d-none', !text);
+}
+document.getElementById('newUserMustChangePwd').addEventListener('change', (event) => {
+  if (!event.target.checked) return showPwdOptionsHint('');
+  const cannot = document.getElementById('newUserCannotChangePwd');
+  const never = document.getElementById('newUserPwdNeverExpires');
+  if (cannot.checked || never.checked) {
+    cannot.checked = false;
+    never.checked = false;
+    showPwdOptionsHint('Odznaczono „nie może zmienić hasła” i „hasło nigdy nie wygasa”: nie da się ich połączyć z wymuszeniem zmiany hasła.');
+  }
+  return undefined;
+});
+['newUserCannotChangePwd', 'newUserPwdNeverExpires'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', (event) => {
+    const must = document.getElementById('newUserMustChangePwd');
+    if (event.target.checked && must.checked) {
+      must.checked = false;
+      showPwdOptionsHint('Odznaczono „wymuś zmianę hasła”: nie da się jej połączyć z tą opcją.');
+    } else {
+      showPwdOptionsHint('');
+    }
+  });
+});
+
 function renderNewUserGroups() {
+  updateReferenceGroupsButton();
   const groups = Array.from(state.newUser.groups);
   document.getElementById('newUserGroupsCount').textContent = String(groups.length);
   if (!groups.length) {
-    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak grup. Wybierz użytkownika wzorcowego lub dodaj grupy ręcznie.</div>';
+    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak grup. Dodaj grupy ręcznie lub skopiuj je od użytkownika wzorcowego.</div>';
     return;
   }
   newUserGroupsList.innerHTML = groups
@@ -2078,18 +2111,39 @@ async function applyReferenceUser(item) {
   setOuFieldValue('newUserOuDn', parentDn(refDn));
   document.getElementById('newUserOuFromReference').classList.remove('d-none');
 
-  state.newUser.groups = new Set(toArray(data.memberOf));
-  renderNewUserGroups();
+  // Groups are not copied automatically; the admin adds them on demand with
+  // the "Dodaj grupy od wzorca" button.
+  state.newUser.referenceGroups = toArray(data.memberOf).map(String);
+  updateReferenceGroupsButton();
   updateNewUserSubmitState();
-  showToast(`Skopiowano OU i ${state.newUser.groups.size} grup(y) od: ${name}`);
+  showToast(`Skopiowano OU od: ${name}. Grupy wzorca (${state.newUser.referenceGroups.length}) możesz dodać w sekcji Grupy.`);
 }
+
+function updateReferenceGroupsButton() {
+  const btn = document.getElementById('newUserAddReferenceGroupsBtn');
+  const refGroups = state.newUser.referenceGroups || [];
+  const missing = refGroups.filter((g) => !state.newUser.groups.has(g)).length;
+  btn.classList.toggle('d-none', !state.newUser.referenceDn);
+  btn.disabled = !missing;
+  document.getElementById('newUserReferenceGroupsCount').textContent = String(missing);
+  btn.title = refGroups.length ? (missing ? 'Dodaj brakujące grupy użytkownika wzorcowego' : 'Wszystkie grupy wzorca są już dodane') : 'Użytkownik wzorcowy nie należy do żadnej grupy';
+}
+
+document.getElementById('newUserAddReferenceGroupsBtn').addEventListener('click', () => {
+  const before = state.newUser.groups.size;
+  state.newUser.referenceGroups.forEach((g) => state.newUser.groups.add(g));
+  renderNewUserGroups();
+  showToast(`Dodano ${state.newUser.groups.size - before} grup(y) od użytkownika wzorcowego`);
+});
 
 function clearReferenceUser() {
   state.newUser.referenceDn = null;
+  state.newUser.referenceGroups = [];
   document.getElementById('newUserReferenceDn').value = '';
   document.getElementById('newUserReferenceEmpty').classList.remove('d-none');
   document.getElementById('newUserReferenceSelected').classList.add('d-none');
   document.getElementById('newUserOuFromReference').classList.add('d-none');
+  updateReferenceGroupsButton();
 }
 
 const pickReferenceUser = () => openUserPicker({
@@ -2099,21 +2153,18 @@ const pickReferenceUser = () => openUserPicker({
 
 document.getElementById('pickReferenceUserBtn').addEventListener('click', pickReferenceUser);
 document.getElementById('changeReferenceUserBtn').addEventListener('click', pickReferenceUser);
-document.getElementById('clearReferenceUserBtn').addEventListener('click', () => {
-  clearReferenceUser();
-  state.newUser.groups.clear();
-  renderNewUserGroups();
-});
+document.getElementById('clearReferenceUserBtn').addEventListener('click', clearReferenceUser);
 
 function resetNewUserForm() {
   newUserForm.reset();
   newUserForm.querySelector('input[name="accountExpiresDate"]').disabled = true;
   newUserPassword.type = 'password';
-  state.newUser = { referenceDn: null, groups: new Set(), loginTouched: false };
+  state.newUser = { referenceDn: null, referenceGroups: [], groups: new Set(), loginTouched: false };
   clearReferenceUser();
   setOuFieldValue('newUserOuDn', '', { silent: true });
   renderNewUserGroups();
   setNewUserLoginState('idle', '');
+  showPwdOptionsHint('');
 }
 
 // The picker modals open on top of the wizard without hiding it, so this

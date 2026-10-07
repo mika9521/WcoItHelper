@@ -540,6 +540,7 @@ router.post('/api/user/create', async (req, res) => {
       details: {
         login: req.body?.login || '',
         referenceUserDn: req.body?.referenceUserDn || '',
+        settings: result?.settings || {},
         addedGroups: result?.addedGroups || [],
         failedGroups: result?.failedGroups || []
       }

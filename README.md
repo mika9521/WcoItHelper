@@ -47,7 +47,8 @@ npm run dev
 
 ## Ważne dla AD
 
-- Do ustawiania haseł i modyfikacji kont używaj `LDAPS`.
+- Do ustawiania haseł i modyfikacji kont używaj `LDAPS` (lub StartTLS). Bez szyfrowania AD odrzuca ustawienie hasła (`0000001F ... WILL_NOT_PERFORM`) i portal nie pozwoli utworzyć konta.
+- Opcja „Użytkownik nie może zmienić hasła” jest zapisywana jako wpisy ACL (odmowa prawa „Change Password” dla SELF i Everyone), tak jak w ADUC; konto serwisowe potrzebuje prawa zapisu uprawnień (WRITE_DAC) do edycji tej opcji na istniejących kontach.
 - Konto serwisowe powinno mieć tylko minimalne wymagane uprawnienia.
 - W produkcji ustaw `AD_TLS_REJECT_UNAUTHORIZED=true` i poprawny certyfikat CA.
 
