@@ -170,7 +170,6 @@ async function createUser(payload, authContext = null) {
     ouDn,
     firstName,
     lastName,
-    login,
     password,
     description,
     mustChangePasswordAtNextLogon,
@@ -180,27 +179,31 @@ async function createUser(payload, authContext = null) {
     accountExpiresMode,
     accountExpiresDate
   } = payload;
+  const login = String(payload.login || '').trim();
+  const groups = Array.isArray(payload.groups) ? payload.groups.filter(Boolean) : [];
 
-  // The AD object name (cn/RDN) is set to the login rather than the full
-  // name, so admins no longer have to rename the object after creation.
-  const cn = login;
+  if (!login) throw new AppError('Brak loginu użytkownika', 400);
+  if (!ouDn) throw new AppError('Nie wybrano docelowego OU', 400);
+  if (!firstName || !lastName) throw new AppError('Imię i nazwisko są wymagane', 400);
+  if (!password) throw new AppError('Hasło jest wymagane', 400);
+
   const displayName = `${firstName} ${lastName}`;
-  const dn = `CN=${cn},${ouDn}`;
-  const domain = env.ad.baseDn
-    .split(',')
-    .map((p) => p.replace(/^DC=/i, ''))
-    .join('.');
+  // The AD object name (cn / RDN, the "Name" column in ADUC) is the login,
+  // e.g. "kowalski.j", not the full name. Creating it under the login right
+  // away (instead of creating "Jan Kowalski" and renaming it) also avoids a
+  // collision when a namesake already exists in the same OU.
+  const dn = `CN=${escapeDnValue(login)},${ouDn}`;
 
   return withAdaptiveBind(authContext, async (client) => {
     await client.add(dn, {
       objectClass: ['top', 'person', 'organizationalPerson', 'user'],
-      cn,
+      cn: login,
       givenName: firstName,
       sn: lastName,
       displayName,
       sAMAccountName: login,
-      userPrincipalName: `${login}@${domain}`,
-      description
+      userPrincipalName: `${login}@${getDomainFromBaseDn()}`,
+      ...(description ? { description } : {})
     });
 
     await client.modify(dn, toChange('replace', 'unicodePwd', encodePassword(password)));
@@ -229,8 +232,37 @@ async function createUser(payload, authContext = null) {
       await client.modify(dn, toChange('replace', 'accountExpires', ACCOUNT_NEVER_EXPIRES));
     }
 
-    return { dn, login };
+    const addedGroups = [];
+    const failedGroups = [];
+    for (const groupDn of groups) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await client.modify(groupDn, toChange('add', 'member', dn));
+        addedGroups.push(groupDn);
+      } catch (error) {
+        failedGroups.push({ groupDn, message: error.message });
+      }
+    }
+
+    return { dn, login, addedGroups, failedGroups };
   });
+}
+
+function getDomainFromBaseDn() {
+  return String(env.ad.baseDn || '')
+    .split(',')
+    .map((p) => p.trim().replace(/^DC=/i, ''))
+    .filter(Boolean)
+    .join('.');
+}
+
+// RFC 4514 escaping for a single RDN attribute value.
+function escapeDnValue(value = '') {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/([,+"<>;=])/g, '\\$1')
+    .replace(/^([ #])/, '\\$1')
+    .replace(/ $/, '\\ ');
 }
 
 function encodePassword(password) {
@@ -513,6 +545,20 @@ async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false, authCont
   });
 }
 
+async function searchOus(query, authContext = null) {
+  const term = escapeFilter(String(query || '').trim());
+  if (!term) return [];
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(env.ad.baseDn, {
+      scope: 'sub',
+      sizeLimit: 100,
+      filter: `(&(|(objectClass=organizationalUnit)(objectClass=container))(|(ou=*${term}*)(name=*${term}*)(description=*${term}*)))`,
+      attributes: ['dn', 'cn', 'distinguishedName', 'objectClass', 'name', 'ou', 'description']
+    });
+    return searchEntries.map((entry) => normalizeObject(entry));
+  });
+}
+
 async function getDashboardStats(authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
     const runCount = async (filter) => {
@@ -584,6 +630,8 @@ module.exports = {
   unlockAccount,
   updateUserSettings,
   listOuChildren,
+  searchOus,
+  getDomainFromBaseDn,
   getDashboardStats,
   getBitlockerKeys,
   isSamAccountNameTaken,

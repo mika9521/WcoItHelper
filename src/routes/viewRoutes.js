@@ -1,4 +1,5 @@
 const express = require('express');
+const { getDomainFromBaseDn } = require('../services/ad/adService');
 const { logEvent } = require('../services/audit/auditLogService');
 
 const router = express.Router();
@@ -14,7 +15,7 @@ router.get('/', async (req, res) => {
     userAgent: req.get('user-agent'),
     message: 'Otwarcie dashboardu'
   });
-  res.render('index', { user: req.session.user });
+  res.render('index', { user: req.session.user, adDomain: getDomainFromBaseDn() });
 });
 
 module.exports = router;

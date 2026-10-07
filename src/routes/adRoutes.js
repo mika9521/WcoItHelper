@@ -14,6 +14,7 @@ const {
   unlockAccount,
   updateUserSettings,
   listOuChildren,
+  searchOus,
   getDashboardStats,
   getBitlockerKeys,
   isSamAccountNameTaken,
@@ -349,6 +350,16 @@ router.get('/api/ou-children', async (req, res) => {
   }
 });
 
+router.get('/api/ou-search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '');
+    const data = await searchOus(q, adAuthFromRequest(req));
+    res.json(data);
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
 router.get('/api/user/certificates', async (req, res) => {
   try {
     const dn = req.query.dn;
@@ -473,7 +484,12 @@ router.post('/api/user/create', async (req, res) => {
       scopeType: 'user',
       scopeDn: result?.dn || '',
       message: 'Utworzenie użytkownika',
-      details: { login: req.body?.login || '' }
+      details: {
+        login: req.body?.login || '',
+        referenceUserDn: req.body?.referenceUserDn || '',
+        addedGroups: result?.addedGroups || [],
+        failedGroups: result?.failedGroups || []
+      }
     });
     res.json(result);
   } catch (error) {

@@ -1,59 +1,84 @@
 <div class="modal fade" id="groupSearchModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Dodaj grupę</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-group"/></svg></span>
+          <div>
+            <h5 class="modal-title">Dodaj grupę</h5>
+            <div class="modal-subtitle">Wyszukaj grupę zabezpieczeń (min. 2 znaki)</div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body">
-        <div class="input-group mb-3">
-          <input id="groupLookupInput" class="form-control" placeholder="Szukaj grupy..." />
+      <div class="lookup-search">
+        <div class="search-input-wrap">
+          <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+          <input id="groupLookupInput" class="form-control" placeholder="Nazwa grupy…" autocomplete="off" />
         </div>
-        <div id="groupLookupResults" class="list-group"></div>
+      </div>
+      <div class="modal-body lookup-body">
+        <div id="groupLookupResults" class="lookup-list"></div>
       </div>
     </div>
   </div>
 </div>
 
 <div class="modal fade" id="referenceUserModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Wybierz innego użytkownika</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-user"/></svg></span>
+          <div>
+            <h5 class="modal-title" id="referenceUserModalTitle">Wybierz użytkownika</h5>
+            <div class="modal-subtitle" id="referenceUserModalSub">Wyszukiwane są wyłącznie konta użytkowników (min. 2 znaki)</div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body">
-        <div class="input-group mb-3">
-          <input id="referenceLookupInput" class="form-control" placeholder="Szukaj użytkownika..." />
+      <div class="lookup-search">
+        <div class="search-input-wrap">
+          <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+          <input id="referenceLookupInput" class="form-control" placeholder="Nazwisko, imię lub login…" autocomplete="off" />
         </div>
-        <div id="referenceLookupResults" class="list-group"></div>
+      </div>
+      <div class="modal-body lookup-body">
+        <div id="referenceLookupResults" class="lookup-list"></div>
       </div>
     </div>
   </div>
 </div>
 
 <div class="modal fade" id="addMemberModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Dodaj członka grupy</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <div class="row g-2 mb-3">
-          <div class="col-4">
-            <select id="memberLookupType" class="form-select">
-              <option value="all">Wszystkie typy</option>
-              <option value="user">Użytkownicy</option>
-              <option value="computer">Komputery</option>
-              <option value="group">Grupy</option>
-            </select>
-          </div>
-          <div class="col-8">
-            <input id="memberLookupInput" class="form-control" placeholder="Szukaj użytkownika, komputera lub grupy..." />
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-users"/></svg></span>
+          <div>
+            <h5 class="modal-title">Dodaj członka grupy</h5>
+            <div class="modal-subtitle">Użytkownik, komputer lub inna grupa</div>
           </div>
         </div>
-        <div id="memberLookupResults" class="list-group"></div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="lookup-search">
+        <div class="d-flex gap-2">
+          <select id="memberLookupType" class="form-select w-auto">
+            <option value="all">Wszystkie typy</option>
+            <option value="user">Użytkownicy</option>
+            <option value="computer">Komputery</option>
+            <option value="group">Grupy</option>
+          </select>
+          <div class="search-input-wrap flex-grow-1">
+            <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+            <input id="memberLookupInput" class="form-control" placeholder="Szukaj…" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-body lookup-body">
+        <div id="memberLookupResults" class="lookup-list"></div>
       </div>
     </div>
   </div>
@@ -63,17 +88,24 @@
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Skopiuj grupy</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-copy"/></svg></span>
+          <div>
+            <h5 class="modal-title">Skopiuj grupy</h5>
+            <div class="modal-subtitle">Zaznacz grupy do dodania</div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
         <div class="mb-2 d-flex gap-2">
-          <button class="btn btn-sm btn-outline-primary" id="selectAllCopyGroups">Zaznacz wszystkie</button>
+          <button class="btn btn-sm btn-outline-secondary" id="selectAllCopyGroups">Zaznacz wszystkie</button>
           <button class="btn btn-sm btn-outline-secondary" id="clearAllCopyGroups">Odznacz wszystkie</button>
         </div>
-        <div id="copyGroupsList"></div>
+        <div id="copyGroupsList" class="check-list"></div>
       </div>
       <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
         <button class="btn btn-primary" id="applyCopyGroupsBtn">Zastosuj</button>
       </div>
     </div>

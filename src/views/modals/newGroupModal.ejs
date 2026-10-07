@@ -1,21 +1,44 @@
 <div class="modal fade" id="newGroupModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
-    <form id="newGroupForm" class="modal-content">
+    <form id="newGroupForm" class="modal-content" autocomplete="off">
       <div class="modal-header">
-        <h5 class="modal-title">Kreator nowej grupy</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-group"/></svg></span>
+          <div>
+            <h5 class="modal-title">Nowa grupa</h5>
+            <div class="modal-subtitle">Globalna grupa zabezpieczeń</div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <input class="form-control" name="name" placeholder="Nazwa grupy (CN)" required />
-        <input class="form-control mt-2" name="samAccountName" placeholder="sAMAccountName" required />
-        <label class="form-label mt-2">OU docelowe</label>
-        <div class="input-group">
-          <input class="form-control" name="ouDn" id="newGroupOuDn" placeholder="Wybierz OU..." readonly required />
-          <button type="button" class="btn btn-outline-secondary pick-ou-btn" data-target-input="newGroupOuDn" data-ou-only="1">Wybierz OU</button>
+        <div class="mb-3">
+          <label class="form-label" for="newGroupName">Nazwa grupy (CN) <span class="text-danger">*</span></label>
+          <input class="form-control" name="name" id="newGroupName" required />
         </div>
-        <textarea class="form-control mt-2" name="description" placeholder="Opis"></textarea>
+        <div class="mb-3">
+          <label class="form-label" for="newGroupSam">sAMAccountName <span class="text-danger">*</span></label>
+          <input class="form-control font-monospace" name="samAccountName" id="newGroupSam" required />
+          <div class="field-hint">Domyślnie taka sama jak nazwa grupy.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Lokalizacja w katalogu <span class="text-danger">*</span></label>
+          <div class="ou-field" data-target-input="newGroupOuDn">
+            <input type="hidden" name="ouDn" id="newGroupOuDn" />
+            <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="newGroupOuDn">
+              <svg class="icon"><use href="#i-folder"/></svg>
+              <span class="ou-field-text" data-placeholder="Wybierz jednostkę organizacyjną…">Wybierz jednostkę organizacyjną…</span>
+              <svg class="icon ou-field-caret"><use href="#i-chevron-down"/></svg>
+            </button>
+          </div>
+        </div>
+        <div>
+          <label class="form-label" for="newGroupDescription">Opis</label>
+          <textarea class="form-control" name="description" id="newGroupDescription" rows="2"></textarea>
+        </div>
       </div>
       <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
         <button class="btn btn-primary">Utwórz grupę</button>
       </div>
     </form>
