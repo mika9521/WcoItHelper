@@ -1,12 +1,12 @@
 const searchBtn = document.getElementById('searchBtn');
 const results = document.getElementById('results');
-const typeFilter = document.getElementById('typeFilter');
+const resultsCount = document.getElementById('resultsCount');
 const searchInput = document.getElementById('searchInput');
-const searchTextWrap = document.getElementById('searchTextWrap');
-const searchOuWrap = document.getElementById('searchOuWrap');
 const searchOuDn = document.getElementById('searchOuDn');
 const objectBody = document.getElementById('objectBody');
 const objectTitle = document.getElementById('objectTitle');
+const objectSubtitle = document.getElementById('objectSubtitle');
+const objectTitleIcon = document.getElementById('objectTitleIcon');
 const loadReportBtn = document.getElementById('loadReportBtn');
 const reportResult = document.getElementById('reportResult');
 const reportsList = document.getElementById('reportsList');
@@ -26,6 +26,7 @@ const portalActivityNext = document.getElementById('portalActivityNext');
 const portalActivityPaginationInfo = document.getElementById('portalActivityPaginationInfo');
 const portalActivityAction = document.getElementById('portalActivityAction');
 const BLOCKED_ACCOUNTS_OU_DN = 'ou=zablokowane_konta,dc=eskulap,dc=local';
+const AD_DOMAIN = document.body.dataset.adDomain || '';
 
 const toast = new bootstrap.Toast(document.getElementById('appToast'));
 const objectModal = new bootstrap.Modal(document.getElementById('objectModal'));
@@ -37,6 +38,7 @@ const ouPickerModal = new bootstrap.Modal(document.getElementById('ouPickerModal
 const softDeleteConfirmModal = new bootstrap.Modal(document.getElementById('softDeleteConfirmModal'));
 const softDeleteSuccessModal = new bootstrap.Modal(document.getElementById('softDeleteSuccessModal'));
 const unlockAccountModal = new bootstrap.Modal(document.getElementById('unlockAccountModal'));
+const certDeleteModal = new bootstrap.Modal(document.getElementById('certDeleteModal'));
 const applyObjectChangesBtn = document.getElementById('applyObjectChangesBtn');
 
 const state = {
@@ -44,25 +46,113 @@ const state = {
   referenceUserDn: null,
   copyGroups: [],
   selectedOuInputId: null,
-  selectedOuOuOnly: true,
   selectedOuDn: null,
+  groupPickHandler: null,
+  userPickHandler: null,
+  newUser: { referenceDn: null, groups: new Set(), loginTouched: false },
   softDeleteTargetDn: null,
   unlockTargetDn: null,
+  certificates: [],
+  certDelete: null,
   bitlockerKeys: [],
   currentObjectDn: null,
   pendingChanges: null,
   ouTreeCache: new Map(),
   activeReportPage: 'stale-logons',
+  searchResults: [],
+  searchSort: { key: null, dir: 1 },
+  hasSearched: false,
   portalActivityPage: 1
 };
+
+function icon(name, extraClass = '') {
+  return `<svg class="icon ${extraClass}"><use href="#i-${name}"/></svg>`;
+}
 
 function showToast(message, isError = false) {
   const body = document.getElementById('toastBody');
   const toastEl = document.getElementById('appToast');
-  toastEl.classList.toggle('text-bg-danger', isError);
-  toastEl.classList.toggle('text-bg-primary', !isError);
+  toastEl.classList.toggle('app-toast-error', isError);
+  toastEl.querySelector('.app-toast-icon').innerHTML = icon(isError ? 'x' : 'check');
   body.textContent = message;
   toast.show();
+}
+
+// Splits a DN into RDNs, honouring backslash-escaped commas.
+function splitDn(dn) {
+  const parts = [];
+  let current = '';
+  const str = String(dn || '');
+  for (let i = 0; i < str.length; i += 1) {
+    const ch = str[i];
+    if (ch === '\\' && i + 1 < str.length) {
+      current += ch + str[i + 1];
+      i += 1;
+    } else if (ch === ',') {
+      parts.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function rdnValue(rdn) {
+  return String(rdn || '').replace(/^[A-Za-z]+=/, '').replace(/\\(.)/g, '$1');
+}
+
+function parentDn(dn) {
+  return splitDn(dn).slice(1).join(',');
+}
+
+// "OU=IT,OU=Szpital,DC=eskulap,DC=local" -> ['eskulap.local', 'Szpital', 'IT']
+function dnToPathSegments(dn) {
+  const rdns = splitDn(dn);
+  const dcs = rdns.filter((r) => /^DC=/i.test(r)).map(rdnValue);
+  const rest = rdns.filter((r) => !/^DC=/i.test(r)).map(rdnValue).reverse();
+  return [dcs.join('.') || AD_DOMAIN, ...rest].filter(Boolean);
+}
+
+function dnToPathHtml(dn, { skipDomain = false } = {}) {
+  const segments = dnToPathSegments(dn);
+  const list = skipDomain && segments.length > 1 ? segments.slice(1) : segments;
+  return list.map((seg) => `<span class="path-seg">${escapeHtml(seg)}</span>`).join('<span class="path-sep">/</span>');
+}
+
+function setOuFieldValue(inputId, dn, { silent = false } = {}) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  input.value = dn || '';
+  document.querySelectorAll(`.ou-field[data-target-input="${inputId}"]`).forEach((field) => {
+    const text = field.querySelector('.ou-field-text');
+    field.classList.toggle('has-value', Boolean(dn));
+    if (!text) return;
+    if (dn) {
+      text.innerHTML = dnToPathHtml(dn);
+      text.title = dn;
+    } else {
+      text.textContent = text.dataset.placeholder || 'Wybierz OU…';
+      text.removeAttribute('title');
+    }
+  });
+  if (!silent) input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function getStatus(item) {
+  const type = detectType(item);
+  if (type !== 'user' && type !== 'computer') return null;
+  const disabled = isAccountDisabled(item);
+  if (disabled && isInBlockedOu(item)) return { key: 'blocked', label: 'Zablokowane' };
+  if (disabled) return { key: 'disabled', label: 'Wyłączone' };
+  return { key: 'active', label: 'Aktywne' };
+}
+
+function initials(text) {
+  const parts = String(text || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '?';
+  return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
 }
 
 async function api(path, options = {}) {
@@ -89,9 +179,11 @@ function getTypeLabel(type) {
   return { user: 'Użytkownik', computer: 'Komputer', group: 'Grupa', ou: 'OU' }[type] || type;
 }
 
+const TYPE_ICONS = { user: 'user', computer: 'computer', group: 'group', ou: 'folder' };
+
 function getTypeBadgeHtml(type) {
-  const abbr = { user: 'U', computer: 'K', group: 'G', ou: 'OU' }[type] || '?';
-  return `<span class="type-badge type-badge-${escapeHtml(type)}">${escapeHtml(abbr)}</span>`;
+  const name = TYPE_ICONS[type] || 'info';
+  return `<span class="type-badge type-badge-${escapeHtml(type)}" title="${escapeHtml(getTypeLabel(type))}">${icon(name)}</span>`;
 }
 
 function getNameFromDn(item) {
@@ -139,6 +231,42 @@ function formatAdDate(raw) {
   return s;
 }
 
+function fileTimeToDate(raw) {
+  const s = String(raw || '');
+  if (!/^\d+$/.test(s) || s === '0' || s === '9223372036854775807') return null;
+  const ms = Math.floor(Number(s) / 10000 - 11644473600000);
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms) : null;
+}
+
+// Most recent of lastLogonTimestamp (replicated, may lag ~14 days) and
+// lastLogon (exact, but only from the DC that answered the query).
+function getLastLogonDate(item) {
+  const dates = [fileTimeToDate(item.lastLogonTimestamp), fileTimeToDate(item.lastLogon)].filter(Boolean);
+  if (!dates.length) return null;
+  return new Date(Math.max(...dates.map((d) => d.getTime())));
+}
+
+function formatRelative(date) {
+  const days = Math.floor((Date.now() - date.getTime()) / 86400000);
+  if (days <= 0) return 'dziś';
+  if (days === 1) return 'wczoraj';
+  if (days < 30) return `${days} dni temu`;
+  const months = Math.floor(days / 30.44);
+  if (months < 12) return `${months} mies. temu`;
+  const years = Math.floor(days / 365.25);
+  return years === 1 ? 'ponad rok temu' : `${years} lat(a) temu`;
+}
+
+function lastLogonCellHtml(item) {
+  const type = detectType(item);
+  if (type !== 'user' && type !== 'computer') return '<span class="text-muted small">—</span>';
+  const date = getLastLogonDate(item);
+  if (!date) return '<span class="logon-cell logon-never">nigdy</span>';
+  const days = (Date.now() - date.getTime()) / 86400000;
+  const tone = days > 180 ? 'logon-stale' : days > 30 ? 'logon-old' : 'logon-recent';
+  return `<span class="logon-cell ${tone}" title="${escapeHtml(date.toLocaleString('pl-PL'))}"><span class="logon-date">${escapeHtml(date.toLocaleDateString('pl-PL'))}</span><span class="logon-rel">${escapeHtml(formatRelative(date))}</span></span>`;
+}
+
 function debounce(fn, wait) {
   let timer = null;
   return (...args) => {
@@ -175,13 +303,9 @@ function renderResultItem(item) {
   const type = detectType(item);
   const dn = item.dn || item.distinguishedName;
   const name = getDisplayName(item);
-  const disabled = isAccountDisabled(item);
-  const inBlockedOu = isInBlockedOu(item);
-  if (disabled && inBlockedOu) {
-    tr.classList.add('table-danger');
-  } else if (disabled) {
-    tr.classList.add('table-warning');
-  }
+  const status = getStatus(item);
+  if (status?.key === 'blocked') tr.classList.add('row-blocked');
+  else if (status?.key === 'disabled') tr.classList.add('row-disabled');
 
   const openDetails = () => {
     document.querySelectorAll('#results tr.result-active').forEach((row) => row.classList.remove('result-active'));
@@ -189,26 +313,38 @@ function renderResultItem(item) {
     openObject(dn, type);
   };
 
+  const login = type === 'user' ? (item.sAMAccountName || '') : '';
+  const secondary = login && login.toLowerCase() !== String(name).toLowerCase()
+    ? `<span class="font-monospace">${escapeHtml(login)}</span> · ${escapeHtml(getTypeLabel(type))}`
+    : escapeHtml(getTypeLabel(type));
+
   const isLockable = type === 'user' || type === 'computer';
-  const showUnlock = isLockable && disabled && inBlockedOu;
-  const lockActionBtn = showUnlock
-    ? '<button class="btn btn-sm btn-outline-success action-unlock">Odblokuj</button>'
-    : (isLockable ? '<button class="btn btn-sm btn-outline-danger action-toggle">Zablokuj</button>' : '');
+  const lockActionBtn = status?.key === 'blocked'
+    ? `<button class="btn-icon btn-icon-success action-unlock" title="Odblokuj konto" aria-label="Odblokuj konto">${icon('unlock')}</button>`
+    : (isLockable ? `<button class="btn-icon btn-icon-danger action-toggle" title="Zablokuj konto (soft delete)" aria-label="Zablokuj konto">${icon('lock')}</button>` : '');
 
   tr.innerHTML = `
-    <td><button type="button" class="btn btn-link p-0 type-open-btn" title="Szczegóły">${getTypeBadgeHtml(type)}</button></td>
-    <td><button type="button" class="btn btn-link p-0 object-link">${name}</button><div class="small text-muted">${getTypeLabel(type)}</div></td>
-    <td class="small">${dn || '-'}</td>
     <td>
-      <div class="d-flex gap-1 justify-content-end flex-wrap">
-        <button class="btn btn-sm btn-outline-primary action-open">Szczegóły</button>
-        <button class="btn btn-sm btn-outline-warning action-move">Przenieś</button>
+      <button type="button" class="object-cell object-link">
+        ${getTypeBadgeHtml(type)}
+        <span class="object-cell-text">
+          <span class="object-cell-name">${escapeHtml(name)}</span>
+          <span class="object-cell-sub">${secondary}</span>
+        </span>
+      </button>
+    </td>
+    <td><div class="path-inline" title="${escapeHtml(dn || '')}">${dn ? dnToPathHtml(parentDn(dn), { skipDomain: true }) : '-'}</div></td>
+    <td>${lastLogonCellHtml(item)}</td>
+    <td>${status ? `<span class="status-pill status-${status.key}">${escapeHtml(status.label)}</span>` : '<span class="text-muted small">—</span>'}</td>
+    <td>
+      <div class="d-flex gap-1 justify-content-end">
+        <button class="btn-icon action-open" title="Szczegóły" aria-label="Szczegóły">${icon('eye')}</button>
+        <button class="btn-icon action-move" title="Przenieś do innego OU" aria-label="Przenieś">${icon('move')}</button>
         ${lockActionBtn}
       </div>
     </td>
   `;
 
-  tr.querySelector('.type-open-btn').addEventListener('click', openDetails);
   tr.querySelector('.object-link').addEventListener('click', openDetails);
   tr.querySelector('.action-open').addEventListener('click', openDetails);
   tr.querySelector('.action-move').addEventListener('click', () => openMoveOnly(dn, getDisplayName(item) || dn));
@@ -217,24 +353,87 @@ function renderResultItem(item) {
   return tr;
 }
 
+function getTypeFilter() {
+  return document.querySelector('input[name="typeFilter"]:checked')?.value || 'all';
+}
+
+function setResultsMessage(html) {
+  results.innerHTML = `<tr><td colspan="5"><div class="empty-state">${html}</div></td></tr>`;
+}
+
+function getSearchOptions() {
+  return {
+    q: searchInput.value.trim(),
+    type: getTypeFilter(),
+    field: document.getElementById('searchField').value,
+    ouDn: searchOuDn.value,
+    subtree: document.getElementById('searchSubtree').checked ? '1' : '0',
+    status: document.getElementById('searchStatus').value,
+    logon: document.getElementById('searchLogon').value,
+    days: document.getElementById('searchDays').value,
+    limit: document.getElementById('searchLimit').value
+  };
+}
+
+function updateActiveFiltersBadge() {
+  const o = getSearchOptions();
+  const active = [o.ouDn, o.field !== 'any', o.subtree === '0', o.status, o.logon, o.limit !== '50'].filter(Boolean).length;
+  const badge = document.getElementById('activeFiltersCount');
+  badge.textContent = String(active);
+  badge.classList.toggle('d-none', !active);
+  document.getElementById('searchDaysWrap').classList.toggle('d-none', !['within', 'older'].includes(o.logon));
+}
+
+const SORTERS = {
+  name: (x) => getDisplayName(x).toLowerCase(),
+  path: (x) => dnToPathSegments(parentDn(x.dn || x.distinguishedName)).join('/').toLowerCase(),
+  logon: (x) => getLastLogonDate(x)?.getTime() ?? -1,
+  status: (x) => ({ active: 0, disabled: 1, blocked: 2 }[getStatus(x)?.key] ?? 3)
+};
+
+function renderSearchResults() {
+  const { key, dir } = state.searchSort;
+  const rows = [...state.searchResults];
+  if (key && SORTERS[key]) {
+    const get = SORTERS[key];
+    rows.sort((a, b) => {
+      const va = get(a);
+      const vb = get(b);
+      if (va < vb) return -dir;
+      if (va > vb) return dir;
+      return 0;
+    });
+  }
+  document.querySelectorAll('#resultsTable th.sortable').forEach((th) => {
+    th.classList.toggle('sorted-asc', th.dataset.sort === key && dir === 1);
+    th.classList.toggle('sorted-desc', th.dataset.sort === key && dir === -1);
+  });
+  results.innerHTML = '';
+  if (resultsCount) resultsCount.textContent = String(rows.length);
+  rows.forEach((row) => results.appendChild(renderResultItem(row)));
+  if (!rows.length) setResultsMessage(`${icon('search')}<div>Brak wyników dla podanych kryteriów.</div>`);
+}
+
 async function runSearch() {
+  const options = getSearchOptions();
+  if (!options.q && !options.ouDn && !options.status && !options.logon) {
+    showToast('Wpisz frazę lub ustaw filtr (np. OU), aby wyszukać', true);
+    searchInput.focus();
+    return;
+  }
+  const truncatedEl = document.getElementById('resultsTruncated');
   try {
-    const selectedType = typeFilter.value;
-    const type = selectedType === 'ou-selection' ? 'all' : selectedType;
-    const q = encodeURIComponent(searchInput?.value || '');
-    let url = `/api/search?q=${q}&type=${encodeURIComponent(type)}`;
-    if (selectedType === 'ou-selection') {
-      if (!searchOuDn.value) {
-        showToast('Najpierw wybierz OU do przeszukania', true);
-        return;
-      }
-      url = `/api/search?ouDn=${encodeURIComponent(searchOuDn.value)}&type=${encodeURIComponent(type)}`;
-    }
-    const data = await api(url);
-    results.innerHTML = '';
-    data.forEach((row) => results.appendChild(renderResultItem(row)));
-    if (!data.length) results.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-3">Brak wyników</td></tr>';
+    state.hasSearched = true;
+    setResultsMessage('<span class="spinner-border spinner-border-sm text-primary"></span><div>Wyszukiwanie…</div>');
+    const params = new URLSearchParams(options);
+    const data = await api(`/api/search/advanced?${params.toString()}`);
+    state.searchResults = data.rows || [];
+    truncatedEl.classList.toggle('d-none', !data.truncated);
+    truncatedEl.textContent = data.truncated ? `pokazano pierwsze ${data.limit}, zawęź wyszukiwanie lub zwiększ limit w filtrach` : '';
+    renderSearchResults();
   } catch (error) {
+    truncatedEl.classList.add('d-none');
+    setResultsMessage(`<div class="text-danger">${escapeHtml(error.message)}</div>`);
     showToast(error.message, true);
   }
 }
@@ -324,11 +523,11 @@ function memberOfTemplate(data) {
   const userDn = data.distinguishedName || data.dn;
   return `
     <div class="mb-2 group-member-list" id="memberOfList" data-userdn="${escapeHtml(userDn)}">
-      ${groups.map((g) => `<div class="member-of-line" data-groupdn="${escapeHtml(g)}"><span class="badge text-bg-info group-badge">${escapeHtml(g)}</span><button type="button" class="btn-close remove-group-btn ms-2" aria-label="Usuń" data-groupdn="${escapeHtml(g)}"></button></div>`).join('') || '<span class="text-muted">Brak grup</span>'}
+      ${groups.map((g) => renderPendingMemberLine(g, false)).join('') || '<span class="text-muted">Brak grup</span>'}
     </div>
     <div class="d-flex gap-2">
-      <button class="btn btn-outline-primary btn-sm" id="openAddGroupModal" data-userdn="${userDn}">Dodaj</button>
-      <button class="btn btn-outline-secondary btn-sm" id="openReferenceModal" data-userdn="${userDn}">Inny użytkownik</button>
+      <button class="btn btn-outline-primary btn-sm" id="openAddGroupModal" data-userdn="${escapeHtml(userDn)}">${icon('plus')} Dodaj grupę</button>
+      <button class="btn btn-outline-secondary btn-sm" id="openReferenceModal" data-userdn="${escapeHtml(userDn)}">${icon('copy')} Kopiuj z innego użytkownika</button>
     </div>
   `;
 }
@@ -338,17 +537,20 @@ function membersTemplate(data) {
   const groupDn = data.distinguishedName || data.dn;
   return `
     <div class="mb-2 group-member-list" id="membersList" data-groupdn="${escapeHtml(groupDn)}">
-      ${members.map((m) => `<div class="member-of-line" data-memberdn="${escapeHtml(m)}"><span class="badge text-bg-secondary group-badge">${escapeHtml(m)}</span><button type="button" class="btn-close remove-member-btn ms-2" aria-label="Usuń" data-memberdn="${escapeHtml(m)}"></button></div>`).join('') || '<span class="text-muted">Brak członków</span>'}
+      ${members.map((m) => renderPendingMemberEntry(m, false)).join('') || '<span class="text-muted">Brak członków</span>'}
     </div>
     <div class="d-flex gap-2">
-      <button class="btn btn-outline-primary btn-sm" id="openAddMemberModal" data-groupdn="${escapeHtml(groupDn)}">Dodaj członka</button>
+      <button class="btn btn-outline-primary btn-sm" id="openAddMemberModal" data-groupdn="${escapeHtml(groupDn)}">${icon('plus')} Dodaj członka</button>
     </div>
   `;
 }
 
+function dnChipContent(dn) {
+  return `<span class="dn-chip-name">${escapeHtml(dnLabel(dn))}</span><span class="dn-chip-path">${dnToPathHtml(parentDn(dn), { skipDomain: true })}</span>`;
+}
+
 function renderPendingMemberEntry(memberDn, pendingAdd = false) {
-  const badgeClass = pendingAdd ? 'text-bg-warning text-dark' : 'text-bg-secondary';
-  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-memberdn="${escapeHtml(memberDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(memberDn)}</span><button type="button" class="btn-close remove-member-btn ms-2" aria-label="Usuń" data-memberdn="${escapeHtml(memberDn)}"></button></div>`;
+  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-memberdn="${escapeHtml(memberDn)}"><span class="group-badge" title="${escapeHtml(memberDn)}">${dnChipContent(memberDn)}</span><button type="button" class="btn-icon btn-icon-sm remove-member-btn" aria-label="Usuń" title="Usuń" data-memberdn="${escapeHtml(memberDn)}">${icon('x')}</button></div>`;
 }
 
 function userSettingsTemplate(data) {
@@ -417,8 +619,11 @@ function userDataTemplate(data) {
 
 function certificatesTemplate(dn) {
   return `
-    <div class="small text-muted mb-2">Certyfikaty kart inteligentnych (smart card) przypisane do konta w AD.</div>
-    <div class="user-certificates-list" data-dn="${escapeHtml(dn || '')}">Ładowanie certyfikatów…</div>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="small text-muted">Certyfikaty zapisane na koncie w AD (atrybut <code>userCertificate</code>), np. certyfikaty kart inteligentnych.</div>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="reloadCertificatesBtn">${icon('refresh')} Odśwież</button>
+    </div>
+    <div class="user-certificates-list" data-dn="${escapeHtml(dn || '')}"><div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Ładowanie certyfikatów…</div></div>
   `;
 }
 
@@ -530,6 +735,16 @@ function formatAuditDetails(event) {
     rows.push(`<div class="mt-1">Nowy stan konta: <strong>${details.enabled ? 'włączone' : 'wyłączone'}</strong></div>`);
   } else if (action === 'account_unlock') {
     rows.push('<div class="mt-1">Konto odblokowane (włączone)' + (event.targetDn ? ` i przeniesione do <code class="small">${escapeHtml(event.targetDn)}</code>` : '') + '</div>');
+  } else if (action === 'account_soft_delete') {
+    if (event.targetDn) rows.push(`<div class="mt-1">Wyłączono i przeniesiono do: <code class="small">${escapeHtml(event.targetDn)}</code></div>`);
+    if (details.groupsBefore) {
+      rows.push(`<div class="mt-1"><span class="fw-semibold">Grupy przed usunięciem (${details.groupsBefore.length}):</span>${formatDnList(details.groupsBefore)}</div>`);
+    }
+    if ((details.failedGroups || []).length) {
+      rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">Nie udało się usunąć z:</span>${formatDnList(details.failedGroups.map((f) => f.groupDn))}</div>`);
+    }
+  } else if (action === 'user_certificate_delete') {
+    rows.push(`<div class="mt-1"><span class="fw-semibold">Certyfikat:</span> ${escapeHtml(details.subject || details.subjectCn || '-')}${details.thumbprint ? ` · odcisk <code class="small">${escapeHtml(details.thumbprint)}</code>` : ''}${details.serialNumber ? ` · nr <code class="small">${escapeHtml(details.serialNumber)}</code>` : ''}</div>`);
   } else if (action === 'object_move') {
     if (event.targetDn) rows.push(`<div class="mt-1">Przeniesiono do: <code class="small">${escapeHtml(event.targetDn)}</code></div>`);
   } else if (action === 'user_settings_update') {
@@ -682,55 +897,94 @@ async function loadBitlockerKeys(dn) {
   }
 }
 
+function formatCertDate(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleDateString('pl-PL');
+}
+
+function certStatusHtml(cert) {
+  if (cert.parseError) return '<span class="status-pill status-disabled">Nieczytelny</span>';
+  if (cert.expired) return '<span class="status-pill status-blocked">Wygasł</span>';
+  if (cert.notYetValid) return '<span class="status-pill status-disabled">Jeszcze nieważny</span>';
+  return '<span class="status-pill status-active">Ważny</span>';
+}
+
 async function loadUserCertificates(dn) {
   const holder = document.querySelector('.user-certificates-list');
   if (!holder || !dn) return;
   try {
     const rows = await api(`/api/user/certificates?dn=${encodeURIComponent(dn)}`);
+    state.certificates = rows;
     holder.innerHTML = rows.length
       ? `
-        <div class="table-responsive">
-          <table class="table table-sm table-striped align-middle mb-0">
+        <div class="table-responsive report-table-wrap">
+          <table class="table table-sm table-hover align-middle mb-0">
             <thead>
-              <tr><th>Podmiot</th><th>Wydawca</th><th>Ważny od</th><th>Ważny do</th><th>Numer seryjny</th><th></th></tr>
+              <tr><th>Wystawiony dla</th><th>Wystawca</th><th>Ważność</th><th>Status</th><th>Odcisk palca (SHA-1)</th><th></th></tr>
             </thead>
             <tbody>
-              ${rows.map((row) => `
+              ${rows.map((row, idx) => `
                 <tr>
-                  <td class="small text-break">${escapeHtml(row.subjectCn || row.subject || '-')}</td>
+                  <td class="small text-break"><span class="fw-semibold">${escapeHtml(row.subjectCn || row.subject || '-')}</span>${row.subjectAltName ? `<div class="text-muted">${escapeHtml(row.subjectAltName)}</div>` : ''}</td>
                   <td class="small text-break">${escapeHtml(row.issuerCn || row.issuer || '-')}</td>
-                  <td class="small">${escapeHtml(formatAdDate(row.validFrom))}</td>
-                  <td class="small">${escapeHtml(formatAdDate(row.validTo))}</td>
-                  <td class="font-monospace small text-break">${escapeHtml(row.serialNumber || '-')}</td>
-                  <td><button type="button" class="btn btn-sm btn-outline-danger revoke-certificate-btn" data-raw="${escapeHtml(row.raw)}" data-subject="${escapeHtml(row.subjectCn || row.subject || '')}">Odwołaj certyfikat</button></td>
+                  <td class="small text-nowrap">${escapeHtml(formatCertDate(row.validFrom))} – ${escapeHtml(formatCertDate(row.validTo))}</td>
+                  <td>${certStatusHtml(row)}</td>
+                  <td class="font-monospace small text-break">${escapeHtml(row.thumbprint || '-')}</td>
+                  <td class="text-end"><button type="button" class="btn-icon btn-icon-danger delete-certificate-btn" data-index="${idx}" title="Usuń certyfikat" aria-label="Usuń certyfikat">${icon('x')}</button></td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
         </div>
       `
-      : '<div class="text-muted small">Brak certyfikatów przypisanych do tego konta.</div>';
+      : `<div class="empty-state">${icon('key')}<div>Brak certyfikatów przypisanych do tego konta.</div></div>`;
 
-    holder.querySelectorAll('.revoke-certificate-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const subject = btn.dataset.subject || 'ten certyfikat';
-        if (!window.confirm(`Odwołać certyfikat "${subject}"? Użytkownik nie będzie mógł się nim zalogować kartą inteligentną.`)) return;
-        try {
-          await api('/api/user/certificates/revoke', {
-            method: 'POST',
-            body: JSON.stringify({ userDn: dn, certificateBase64: btn.dataset.raw, subjectCn: subject })
-          });
-          showToast('Certyfikat odwołany');
-          await loadUserCertificates(dn);
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      });
+    holder.querySelectorAll('.delete-certificate-btn').forEach((btn) => {
+      btn.addEventListener('click', () => openCertDeleteModal(dn, state.certificates[Number(btn.dataset.index)]));
     });
   } catch (error) {
     holder.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
   }
 }
+
+function openCertDeleteModal(userDn, cert) {
+  if (!cert) return;
+  state.certDelete = { userDn, cert };
+  const rows = [
+    ['Wystawiony dla', cert.subjectCn || cert.subject],
+    ['Wystawca', cert.issuerCn || cert.issuer],
+    ['Ważny do', formatCertDate(cert.validTo)],
+    ['Numer seryjny', cert.serialNumber],
+    ['Odcisk palca', cert.thumbprint]
+  ];
+  document.getElementById('certDeleteSummary').innerHTML = rows
+    .map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd class="${k === 'Odcisk palca' || k === 'Numer seryjny' ? 'font-monospace' : ''}">${escapeHtml(v || '-')}</dd>`)
+    .join('');
+  certDeleteModal.show();
+}
+
+document.getElementById('confirmCertDeleteBtn').addEventListener('click', async () => {
+  const pending = state.certDelete;
+  if (!pending) return;
+  const btn = document.getElementById('confirmCertDeleteBtn');
+  try {
+    btn.disabled = true;
+    await api('/api/user/certificates/delete', {
+      method: 'POST',
+      body: JSON.stringify({ userDn: pending.userDn, fingerprint256: pending.cert.fingerprint256 })
+    });
+    certDeleteModal.hide();
+    showToast('Certyfikat usunięty z konta');
+    await loadUserCertificates(pending.userDn);
+    await loadObjectAuditLogs(pending.userDn);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    btn.disabled = false;
+    state.certDelete = null;
+  }
+});
 
 async function loadGlobalAuditWidgets() {
   try {
@@ -810,27 +1064,44 @@ async function initPortalActivityActions() {
 }
 
 function renderPendingMemberLine(groupDn, pendingAdd = false) {
-  const badgeClass = pendingAdd ? 'text-bg-warning text-dark' : 'text-bg-info';
-  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-groupdn="${escapeHtml(groupDn)}"><span class="badge ${badgeClass} group-badge">${escapeHtml(groupDn)}</span><button type="button" class="btn-close remove-group-btn ms-2" aria-label="Usuń" data-groupdn="${escapeHtml(groupDn)}"></button></div>`;
+  return `<div class="member-of-line ${pendingAdd ? 'pending-added' : ''}" data-groupdn="${escapeHtml(groupDn)}"><span class="group-badge" title="${escapeHtml(groupDn)}">${dnChipContent(groupDn)}</span><button type="button" class="btn-icon btn-icon-sm remove-group-btn" aria-label="Usuń" title="Usuń" data-groupdn="${escapeHtml(groupDn)}">${icon('x')}</button></div>`;
 }
 
 function moveTemplate(objectDn) {
   return `
-    <label class="form-label">Nowe OU DN</label>
-    <div class="input-group">
-      <input id="newOuDn" class="form-control" placeholder="Wybierz OU..." readonly />
-      <button class="btn btn-outline-secondary pick-ou-btn" data-target-input="newOuDn" data-ou-only="1">Wybierz OU</button>
+    <div class="mb-3">
+      <div class="small text-muted mb-1">Obecna lokalizacja</div>
+      <div class="path-inline">${dnToPathHtml(parentDn(objectDn))}</div>
     </div>
-    <div class="form-text mt-2">Zmiana zostanie wykonana po kliknięciu „Zastosuj”.</div>
+    <label class="form-label">Nowa lokalizacja</label>
+    <div class="ou-field" data-target-input="newOuDn">
+      <input type="hidden" id="newOuDn" />
+      <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="newOuDn">
+        ${icon('folder')}
+        <span class="ou-field-text" data-placeholder="Wybierz jednostkę organizacyjną…">Wybierz jednostkę organizacyjną…</span>
+        ${icon('chevron-down', 'ou-field-caret')}
+      </button>
+    </div>
+    <div class="field-hint">Zmiana zostanie wykonana po kliknięciu „Zastosuj zmiany”.</div>
     <input type="hidden" id="moveObjectDn" value="${escapeHtml(objectDn)}" />
   `;
+}
+
+function setObjectHeader(title, type, subtitleHtml = '') {
+  objectTitle.textContent = title;
+  if (objectSubtitle) objectSubtitle.innerHTML = subtitleHtml;
+  if (objectTitleIcon) {
+    objectTitleIcon.className = `modal-title-icon type-tone-${type || 'none'}`;
+    objectTitleIcon.innerHTML = icon(TYPE_ICONS[type] || 'move');
+  }
 }
 
 async function openObject(dn, typeHint) {
   try {
     const data = await api(`/api/object?dn=${encodeURIComponent(dn)}`);
     const type = typeHint || detectType(data);
-    objectTitle.textContent = `${getDisplayName(data)} (${getTypeLabel(type)})`;
+    const objDn = data.distinguishedName || data.dn || dn;
+    setObjectHeader(getDisplayName(data), type, `${escapeHtml(getTypeLabel(type))} · ${dnToPathHtml(parentDn(objDn))}`);
     objectBody.innerHTML = type === 'computer'
       ? computerTemplate(data)
       : type === 'group'
@@ -852,7 +1123,7 @@ async function openObject(dn, typeHint) {
 }
 
 function openMoveOnly(dn, label) {
-  objectTitle.textContent = `Przeniesienie: ${label}`;
+  setObjectHeader(`Przenieś: ${label}`, null, 'Przeniesienie obiektu do innej jednostki organizacyjnej');
   objectBody.innerHTML = moveTemplate(dn);
   state.currentObjectDn = dn;
   state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
@@ -870,7 +1141,25 @@ function openSoftDeleteModal(item) {
   state.softDeleteTargetDn = dn;
   const target = document.getElementById('softDeleteTargetDn');
   if (target) target.textContent = dn;
+  const list = document.getElementById('softDeleteGroupsList');
+  const count = document.getElementById('softDeleteGroupsCount');
+  count.textContent = '…';
+  list.innerHTML = '<div class="lookup-empty py-2"><span class="spinner-border spinner-border-sm text-primary"></span> Pobieranie grup…</div>';
   softDeleteConfirmModal.show();
+  api(`/api/object?dn=${encodeURIComponent(dn)}`)
+    .then((data) => {
+      if (state.softDeleteTargetDn !== dn) return;
+      const groups = toArray(data.memberOf).map(String);
+      count.textContent = String(groups.length);
+      list.innerHTML = groups.length
+        ? groups.map((g) => `<div class="member-of-line"><span class="group-badge" title="${escapeHtml(g)}">${dnChipContent(g)}</span></div>`).join('')
+        : '<div class="chip-empty">Konto nie należy do żadnej grupy (poza grupą podstawową).</div>';
+    })
+    .catch((error) => {
+      if (state.softDeleteTargetDn !== dn) return;
+      count.textContent = '?';
+      list.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
+    });
 }
 
 function openUnlockModal(item) {
@@ -882,8 +1171,7 @@ function openUnlockModal(item) {
   state.unlockTargetDn = dn;
   const label = document.getElementById('unlockTargetDnLabel');
   if (label) label.textContent = dn;
-  const ouInput = document.getElementById('unlockTargetOuDn');
-  if (ouInput) ouInput.value = '';
+  setOuFieldValue('unlockTargetOuDn', '', { silent: true });
   unlockAccountModal.show();
 }
 
@@ -891,10 +1179,53 @@ function renderLookupItem(container, item, onPick) {
   const btn = document.createElement('button');
   btn.type = 'button';
   const type = detectType(item);
-  btn.className = 'list-group-item list-group-item-action';
-  btn.innerHTML = `${getTypeBadgeHtml(type)} ${escapeHtml(getDisplayName(item))}<div class="small text-muted">${escapeHtml(item.dn || item.distinguishedName || '')}</div>`;
+  const dn = item.dn || item.distinguishedName || '';
+  const status = getStatus(item);
+  const login = type === 'user' && item.sAMAccountName ? `<span class="font-monospace">${escapeHtml(item.sAMAccountName)}</span> · ` : '';
+  btn.className = 'lookup-item';
+  btn.innerHTML = `
+    ${getTypeBadgeHtml(type)}
+    <span class="lookup-item-text">
+      <span class="lookup-item-name">${escapeHtml(getDisplayName(item))}</span>
+      <span class="lookup-item-sub" title="${escapeHtml(dn)}">${login}${dnToPathHtml(parentDn(dn), { skipDomain: true })}</span>
+    </span>
+    ${status && status.key !== 'active' ? `<span class="status-pill status-${status.key}">${escapeHtml(status.label)}</span>` : ''}
+    ${icon('chevron-right', 'lookup-item-caret')}
+  `;
   btn.addEventListener('click', () => onPick(item));
   container.appendChild(btn);
+}
+
+function setLookupMessage(container, html) {
+  container.innerHTML = `<div class="lookup-empty">${html}</div>`;
+}
+
+// Debounced type-ahead for the lookup modals; ignores stale responses.
+function bindLookup(input, container, fetchRows, onPick) {
+  let seq = 0;
+  const run = debounce(async () => {
+    const q = input.value.trim();
+    const mySeq = ++seq;
+    if (q.length < 2) {
+      setLookupMessage(container, 'Wpisz co najmniej 2 znaki.');
+      return;
+    }
+    setLookupMessage(container, '<span class="spinner-border spinner-border-sm text-primary"></span> Wyszukiwanie…');
+    try {
+      const rows = await fetchRows(q);
+      if (mySeq !== seq) return;
+      container.innerHTML = '';
+      if (!rows.length) {
+        setLookupMessage(container, 'Brak wyników.');
+        return;
+      }
+      rows.forEach((row) => renderLookupItem(container, row, onPick));
+    } catch (error) {
+      if (mySeq === seq) setLookupMessage(container, `<span class="text-danger">${escapeHtml(error.message)}</span>`);
+    }
+  }, 250);
+  input.addEventListener('input', run);
+  return run;
 }
 
 function bindModalActions() {
@@ -913,6 +1244,12 @@ function bindModalActions() {
     });
   }
 
+  const reloadCertificatesBtn = document.getElementById('reloadCertificatesBtn');
+  if (reloadCertificatesBtn && !reloadCertificatesBtn.dataset.bound) {
+    reloadCertificatesBtn.dataset.bound = '1';
+    reloadCertificatesBtn.addEventListener('click', () => loadUserCertificates(state.currentObjectDn));
+  }
+
   const exportBitlockerPdfBtn = document.getElementById('exportBitlockerPdfBtn');
   if (exportBitlockerPdfBtn && !exportBitlockerPdfBtn.dataset.bound) {
     exportBitlockerPdfBtn.dataset.bound = '1';
@@ -928,22 +1265,21 @@ function bindModalActions() {
 
   document.getElementById('openAddGroupModal')?.addEventListener('click', () => {
     state.currentUserDn = document.getElementById('openAddGroupModal').dataset.userdn;
-    document.getElementById('groupLookupInput').value = '';
-    document.getElementById('groupLookupResults').innerHTML = '';
-    groupSearchModal.show();
+    openGroupPicker(addPendingGroupToObject);
   });
 
   document.getElementById('openAddMemberModal')?.addEventListener('click', () => {
     document.getElementById('memberLookupInput').value = '';
-    document.getElementById('memberLookupResults').innerHTML = '';
+    setLookupMessage(document.getElementById('memberLookupResults'), 'Wpisz co najmniej 2 znaki.');
     addMemberModal.show();
   });
 
   document.getElementById('openReferenceModal')?.addEventListener('click', () => {
     state.currentUserDn = document.getElementById('openReferenceModal').dataset.userdn;
-    document.getElementById('referenceLookupInput').value = '';
-    document.getElementById('referenceLookupResults').innerHTML = '';
-    referenceUserModal.show();
+    openUserPicker({
+      title: 'Kopiuj grupy z innego użytkownika',
+      subtitle: 'Wybierz użytkownika, którego grupy chcesz skopiować'
+    }, showCopyGroupsFromUser);
   });
 
   document.querySelectorAll('.remove-group-btn').forEach((btn) => {
@@ -1015,111 +1351,231 @@ function bindModalActions() {
 
 function bindOuPickers() {
   document.querySelectorAll('.pick-ou-btn').forEach((btn) => {
-    btn.onclick = async () => {
-      state.selectedOuInputId = btn.dataset.targetInput;
-      state.selectedOuOuOnly = btn.dataset.ouOnly !== '0';
-      state.selectedOuDn = null;
-      await renderOuTree();
-      ouPickerModal.show();
-    };
+    btn.onclick = () => openOuPicker(btn.dataset.targetInput);
   });
 }
 
-async function fetchOuChildren(parentDn = '', onlyOu = true) {
-  const cacheKey = `${parentDn || 'root'}::${onlyOu ? 'ou' : 'all'}`;
+const ouTreeEl = document.getElementById('ouTree');
+const ouSearchInput = document.getElementById('ouSearchInput');
+const ouSearchResults = document.getElementById('ouSearchResults');
+const ouSelectedPath = document.getElementById('ouSelectedPath');
+const confirmOuBtn = document.getElementById('confirmOuBtn');
+
+async function fetchOuChildren(parentDn = '') {
+  const cacheKey = parentDn || 'root';
   if (state.ouTreeCache.has(cacheKey)) return state.ouTreeCache.get(cacheKey);
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ ouOnly: '1' });
   if (parentDn) params.set('parentDn', parentDn);
-  if (onlyOu) params.set('ouOnly', '1');
-  const data = await api(`/api/ou-children${params.toString() ? `?${params.toString()}` : ''}`);
+  const data = await api(`/api/ou-children?${params.toString()}`);
+  data.sort((x, y) => getDisplayName(x).localeCompare(getDisplayName(y), 'pl', { sensitivity: 'base' }));
   state.ouTreeCache.set(cacheKey, data);
   return data;
 }
 
-async function renderOuTree() {
-  const tree = document.getElementById('ouTree');
-  const rootItems = await fetchOuChildren('', state.selectedOuOuOnly);
-  tree.innerHTML = '<div class="small text-muted mb-2">Kliknij ▶ aby rozwinąć OU. Kliknij nazwę, aby wybrać.</div>';
-
-  const rootList = document.createElement('ul');
-  rootList.className = 'ou-tree-list';
-  tree.appendChild(rootList);
-
-  rootItems.forEach((item) => {
-    rootList.appendChild(createOuTreeNode(item, state.selectedOuOuOnly));
-  });
+function selectOu(dn) {
+  state.selectedOuDn = dn || null;
+  document.querySelectorAll('#ouPickerModal .ou-row.selected').forEach((x) => x.classList.remove('selected'));
+  if (dn) {
+    document.querySelectorAll('#ouPickerModal .ou-row').forEach((row) => {
+      if (row.dataset.dn && row.dataset.dn.toLowerCase() === dn.toLowerCase()) row.classList.add('selected');
+    });
+  }
+  confirmOuBtn.disabled = !dn;
+  ouSelectedPath.innerHTML = dn
+    ? `<span class="text-muted me-1">Wybrano:</span><span class="path-inline" title="${escapeHtml(dn)}">${dnToPathHtml(dn)}</span>`
+    : '<span class="text-muted">Nie wybrano OU</span>';
 }
 
-function createOuTreeNode(item, onlyOu = true) {
-  const type = detectType(item);
+function confirmOuSelection() {
+  if (!state.selectedOuDn || !state.selectedOuInputId) return;
+  setOuFieldValue(state.selectedOuInputId, state.selectedOuDn);
+  ouPickerModal.hide();
+}
+
+function createOuTreeNode(item, depth) {
   const dn = item.dn || item.distinguishedName;
   const li = document.createElement('li');
-  li.className = 'ou-tree-item';
-  li.dataset.dn = dn;
+  li.setAttribute('role', 'treeitem');
 
-  const header = document.createElement('div');
-  header.className = 'ou-tree-node';
-  header.innerHTML = `
-    <button type="button" class="btn btn-sm btn-link p-0 me-1 ou-expand-btn ${type === 'ou' ? '' : 'invisible'}">▶</button>
-    <button type="button" class="btn btn-link p-0 text-start ou-select-btn">${getTypeBadgeHtml(type)} ${escapeHtml(getDisplayName(item))}</button>
+  const row = document.createElement('div');
+  row.className = 'ou-row';
+  row.dataset.dn = dn;
+  row.style.setProperty('--depth', depth);
+  row.innerHTML = `
+    <button type="button" class="ou-toggle" aria-label="Rozwiń">${icon('chevron-right')}</button>
+    <span class="ou-row-icon">${icon('folder')}</span>
+    <span class="ou-row-name">${escapeHtml(getDisplayName(item))}</span>
   `;
-  li.appendChild(header);
+  li.appendChild(row);
 
-  const childrenWrap = document.createElement('ul');
-  childrenWrap.className = 'ou-tree-list d-none';
-  li.appendChild(childrenWrap);
+  const children = document.createElement('ul');
+  children.className = 'ou-children d-none';
+  children.setAttribute('role', 'group');
+  li.appendChild(children);
 
-  header.querySelector('.ou-select-btn').addEventListener('click', () => {
-    document.querySelectorAll('.ou-select-btn.selected').forEach((x) => x.classList.remove('selected'));
-    header.querySelector('.ou-select-btn').classList.add('selected');
-    state.selectedOuDn = dn;
-  });
-
-  header.querySelector('.ou-expand-btn').addEventListener('click', async (event) => {
-    event.preventDefault();
-    if (type !== 'ou') return;
-    const expandBtn = event.currentTarget;
-    const expanded = !childrenWrap.classList.contains('d-none');
-    if (expanded) {
-      childrenWrap.classList.add('d-none');
-      expandBtn.textContent = '▶';
+  const toggle = row.querySelector('.ou-toggle');
+  const expand = async (forceOpen = false) => {
+    const isOpen = !children.classList.contains('d-none');
+    if (isOpen && !forceOpen) {
+      children.classList.add('d-none');
+      row.classList.remove('expanded');
       return;
     }
-    if (!childrenWrap.dataset.loaded) {
-      const children = await fetchOuChildren(dn, onlyOu);
-      children.forEach((child) => {
-        childrenWrap.appendChild(createOuTreeNode(child, onlyOu));
-      });
-      childrenWrap.dataset.loaded = '1';
+    if (!children.dataset.loaded) {
+      row.classList.add('loading');
+      try {
+        const items = await fetchOuChildren(dn);
+        items.forEach((child) => children.appendChild(createOuTreeNode(child, depth + 1)));
+        children.dataset.loaded = '1';
+        if (!items.length) row.classList.add('leaf');
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        row.classList.remove('loading');
+      }
     }
-    childrenWrap.classList.remove('d-none');
-    expandBtn.textContent = '▼';
-  });
+    children.classList.remove('d-none');
+    row.classList.add('expanded');
+    if (state.selectedOuDn) selectOu(state.selectedOuDn);
+  };
+  li._expand = expand;
 
+  toggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    expand();
+  });
+  row.addEventListener('click', () => selectOu(dn));
+  row.addEventListener('dblclick', () => {
+    selectOu(dn);
+    confirmOuSelection();
+  });
   return li;
 }
 
-document.getElementById('confirmOuBtn').addEventListener('click', () => {
-  if (!state.selectedOuDn || !state.selectedOuInputId) return;
-  const input = document.getElementById(state.selectedOuInputId);
-  if (input) {
-    input.value = state.selectedOuDn;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
+// Expands the tree along the path to `dn` so the current value is visible.
+async function revealOuInTree(dn) {
+  const target = String(dn || '').toLowerCase();
+  if (!target) return;
+  const findLi = (parentEl) => Array.from(parentEl.querySelectorAll(':scope > li')).find((li) => {
+    const liDn = li.querySelector(':scope > .ou-row')?.dataset.dn?.toLowerCase() || '';
+    return target === liDn || target.endsWith(`,${liDn}`);
+  });
+  let list = ouTreeEl.querySelector('.ou-root-list');
+  while (list) {
+    const li = findLi(list);
+    if (!li) return;
+    const liDn = li.querySelector(':scope > .ou-row').dataset.dn.toLowerCase();
+    if (liDn === target) {
+      li.querySelector(':scope > .ou-row').scrollIntoView({ block: 'center' });
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await li._expand(true);
+    list = li.querySelector(':scope > .ou-children');
   }
-  ouPickerModal.hide();
-});
+}
+
+async function renderOuTree() {
+  ouTreeEl.innerHTML = '<div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Ładowanie struktury katalogu…</div>';
+  try {
+    const rootItems = await fetchOuChildren('');
+    ouTreeEl.innerHTML = `
+      <div class="ou-domain-row">${icon('domain')}<span>${escapeHtml(AD_DOMAIN || 'Domena')}</span></div>
+      <ul class="ou-root-list" role="group"></ul>
+    `;
+    const list = ouTreeEl.querySelector('.ou-root-list');
+    rootItems.forEach((item) => list.appendChild(createOuTreeNode(item, 0)));
+    if (!rootItems.length) ouTreeEl.insertAdjacentHTML('beforeend', '<div class="lookup-empty">Brak jednostek organizacyjnych.</div>');
+  } catch (error) {
+    ouTreeEl.innerHTML = `<div class="lookup-empty text-danger">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderOuSearchResults(rows) {
+  if (!rows.length) {
+    ouSearchResults.innerHTML = '<div class="lookup-empty">Brak pasujących OU.</div>';
+    return;
+  }
+  ouSearchResults.innerHTML = '';
+  rows.forEach((item) => {
+    const dn = item.dn || item.distinguishedName;
+    const row = document.createElement('div');
+    row.className = 'ou-row ou-row-flat';
+    row.dataset.dn = dn;
+    row.innerHTML = `
+      <span class="ou-row-icon">${icon('folder')}</span>
+      <span class="ou-row-text">
+        <span class="ou-row-name">${escapeHtml(getDisplayName(item))}</span>
+        <span class="ou-row-path">${dnToPathHtml(parentDn(dn))}</span>
+      </span>
+    `;
+    row.addEventListener('click', () => selectOu(dn));
+    row.addEventListener('dblclick', () => {
+      selectOu(dn);
+      confirmOuSelection();
+    });
+    ouSearchResults.appendChild(row);
+  });
+  if (state.selectedOuDn) selectOu(state.selectedOuDn);
+}
+
+let ouSearchSeq = 0;
+const runOuSearch = debounce(async () => {
+  const q = ouSearchInput.value.trim();
+  const mySeq = ++ouSearchSeq;
+  const searching = q.length >= 2;
+  ouTreeEl.classList.toggle('d-none', searching);
+  ouSearchResults.classList.toggle('d-none', !searching);
+  if (!searching) return;
+  ouSearchResults.innerHTML = '<div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Wyszukiwanie…</div>';
+  try {
+    const rows = await api(`/api/ou-search?q=${encodeURIComponent(q)}`);
+    if (mySeq !== ouSearchSeq) return;
+    rows.sort((x, y) => getDisplayName(x).localeCompare(getDisplayName(y), 'pl', { sensitivity: 'base' }));
+    renderOuSearchResults(rows);
+  } catch (error) {
+    if (mySeq === ouSearchSeq) ouSearchResults.innerHTML = `<div class="lookup-empty text-danger">${escapeHtml(error.message)}</div>`;
+  }
+}, 250);
+
+ouSearchInput.addEventListener('input', runOuSearch);
+
+async function openOuPicker(targetInputId) {
+  state.selectedOuInputId = targetInputId;
+  const current = document.getElementById(targetInputId)?.value || '';
+  ouSearchInput.value = '';
+  ouTreeEl.classList.remove('d-none');
+  ouSearchResults.classList.add('d-none');
+  selectOu(current || null);
+  ouPickerModal.show();
+  await renderOuTree();
+  if (current) {
+    await revealOuInTree(current);
+    selectOu(current);
+  }
+}
+
+document.getElementById('ouPickerModal').addEventListener('shown.bs.modal', () => ouSearchInput.focus());
+confirmOuBtn.addEventListener('click', confirmOuSelection);
 
 document.getElementById('confirmSoftDeleteBtn')?.addEventListener('click', async () => {
   if (!state.softDeleteTargetDn) return;
   try {
-    await api('/api/object/soft-delete', {
+    const result = await api('/api/object/soft-delete', {
       method: 'POST',
       body: JSON.stringify({ objectDn: state.softDeleteTargetDn })
     });
+    const removed = result.removedGroups || [];
+    const failed = result.failedGroups || [];
+    document.getElementById('softDeleteSuccessBody').innerHTML = `
+      <p class="mb-2">Konto zostało wyłączone i przeniesione do OU <code>zablokowane_konta</code>.</p>
+      <p class="mb-0">Usunięto z <strong>${removed.length}</strong> z ${(result.groupsBefore || []).length} grup. Lista grup sprzed usunięcia jest zapisana w logach obiektu.</p>
+      ${failed.length ? `<div class="alert alert-danger small mt-3 mb-0"><strong>Nie udało się usunąć z ${failed.length} grup(y):</strong>${formatDnList(failed.map((f) => f.groupDn))}</div>` : ''}
+    `;
     softDeleteConfirmModal.hide();
     softDeleteSuccessModal.show();
-    showToast('Konto zablokowane i przeniesione do OU zablokowane_konta');
-    await runSearch();
+    showToast(failed.length ? `Konto zablokowane, ale ${failed.length} grup(y) nie usunięto` : 'Konto zablokowane i usunięte ze wszystkich grup', failed.length > 0);
+    if (state.hasSearched) await runSearch();
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1139,56 +1595,74 @@ document.getElementById('confirmUnlockBtn')?.addEventListener('click', async () 
     });
     unlockAccountModal.hide();
     showToast('Konto odblokowane i przeniesione');
-    await runSearch();
+    if (state.hasSearched) await runSearch();
   } catch (error) {
     showToast(error.message, true);
   }
 });
 
-document.getElementById('groupLookupInput').addEventListener('input', async (event) => {
-  const q = event.target.value.trim();
-  const box = document.getElementById('groupLookupResults');
-  if (q.length < 2) {
-    box.innerHTML = '';
-    return;
-  }
-  const rows = await api(`/api/search?q=${encodeURIComponent(q)}&type=group`);
-  box.innerHTML = '';
-  rows.forEach((row) => renderLookupItem(box, row, async (item) => {
-    const pickedDn = item.dn || item.distinguishedName;
-    state.pendingChanges.addGroups.add(pickedDn);
-    state.pendingChanges.removeGroups.delete(pickedDn);
-    const list = document.getElementById('memberOfList');
-    if (list && !list.querySelector(`[data-groupdn="${cssEscapeValue(pickedDn)}"]`)) {
-      list.querySelector('.text-muted')?.remove();
-      list.insertAdjacentHTML('beforeend', renderPendingMemberLine(pickedDn, true));
-      list.querySelectorAll('.remove-group-btn').forEach((btn) => {
-        if (btn.dataset.bound) return;
-        btn.dataset.bound = '1';
-        btn.addEventListener('click', () => {
-          const groupDn = btn.dataset.groupdn;
-          state.pendingChanges.removeGroups.add(groupDn);
-          state.pendingChanges.addGroups.delete(groupDn);
-          btn.closest('.member-of-line')?.classList.add('pending-removal');
-        });
-      });
-    }
-    groupSearchModal.hide();
-    showToast('Dodano do zmian oczekujących');
-  }));
-});
+function openGroupPicker(handler) {
+  state.groupPickHandler = handler;
+  document.getElementById('groupLookupInput').value = '';
+  setLookupMessage(document.getElementById('groupLookupResults'), 'Wpisz co najmniej 2 znaki.');
+  groupSearchModal.show();
+}
 
-document.getElementById('memberLookupInput').addEventListener('input', async (event) => {
-  const q = event.target.value.trim();
-  const box = document.getElementById('memberLookupResults');
-  if (q.length < 2) {
-    box.innerHTML = '';
-    return;
+function openUserPicker({ title, subtitle }, handler) {
+  state.userPickHandler = handler;
+  document.getElementById('referenceUserModalTitle').textContent = title || 'Wybierz użytkownika';
+  document.getElementById('referenceUserModalSub').textContent = subtitle || 'Wyszukiwane są wyłącznie konta użytkowników';
+  document.getElementById('referenceLookupInput').value = '';
+  setLookupMessage(document.getElementById('referenceLookupResults'), 'Wpisz co najmniej 2 znaki.');
+  referenceUserModal.show();
+}
+
+document.getElementById('groupSearchModal').addEventListener('shown.bs.modal', () => document.getElementById('groupLookupInput').focus());
+document.getElementById('referenceUserModal').addEventListener('shown.bs.modal', () => document.getElementById('referenceLookupInput').focus());
+document.getElementById('addMemberModal').addEventListener('shown.bs.modal', () => document.getElementById('memberLookupInput').focus());
+
+function addPendingGroupToObject(item) {
+  const pickedDn = item.dn || item.distinguishedName;
+  state.pendingChanges.addGroups.add(pickedDn);
+  state.pendingChanges.removeGroups.delete(pickedDn);
+  const list = document.getElementById('memberOfList');
+  if (list && !list.querySelector(`[data-groupdn="${cssEscapeValue(pickedDn)}"]`)) {
+    list.querySelector(':scope > .text-muted')?.remove();
+    list.insertAdjacentHTML('beforeend', renderPendingMemberLine(pickedDn, true));
+    bindModalActions();
   }
-  const type = document.getElementById('memberLookupType')?.value || 'all';
-  const rows = await api(`/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`);
-  box.innerHTML = '';
-  rows.forEach((row) => renderLookupItem(box, row, (item) => {
+  showToast('Dodano do zmian oczekujących');
+}
+
+async function showCopyGroupsFromUser(item) {
+  state.referenceUserDn = item.dn || item.distinguishedName;
+  const data = await api(`/api/object?dn=${encodeURIComponent(state.referenceUserDn)}`);
+  state.copyGroups = toArray(data.memberOf);
+  document.getElementById('copyGroupsList').innerHTML = state.copyGroups.length
+    ? state.copyGroups.map((groupDn, idx) => `<label class="check-row" for="copy-group-${idx}"><input class="form-check-input copy-group-check" id="copy-group-${idx}" type="checkbox" checked value="${escapeHtml(groupDn)}"><span title="${escapeHtml(groupDn)}">${dnChipContent(groupDn)}</span></label>`).join('')
+    : '<div class="lookup-empty">Wybrany użytkownik nie należy do żadnej grupy.</div>';
+  copyGroupsModal.show();
+}
+
+bindLookup(
+  document.getElementById('groupLookupInput'),
+  document.getElementById('groupLookupResults'),
+  (q) => api(`/api/search?q=${encodeURIComponent(q)}&type=group`),
+  async (item) => {
+    groupSearchModal.hide();
+    try {
+      await state.groupPickHandler?.(item);
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+);
+
+const runMemberLookup = bindLookup(
+  document.getElementById('memberLookupInput'),
+  document.getElementById('memberLookupResults'),
+  (q) => api(`/api/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(document.getElementById('memberLookupType')?.value || 'all')}`),
+  (item) => {
     const pickedDn = item.dn || item.distinguishedName;
     if (pickedDn === state.currentObjectDn) {
       showToast('Nie można dodać grupy jako własnego członka', true);
@@ -1198,33 +1672,34 @@ document.getElementById('memberLookupInput').addEventListener('input', async (ev
     state.pendingChanges.removeMembers.delete(pickedDn);
     const list = document.getElementById('membersList');
     if (list && !list.querySelector(`[data-memberdn="${cssEscapeValue(pickedDn)}"]`)) {
-      list.querySelector('.text-muted')?.remove();
+      list.querySelector(':scope > .text-muted')?.remove();
       list.insertAdjacentHTML('beforeend', renderPendingMemberEntry(pickedDn, true));
       bindModalActions();
     }
     addMemberModal.hide();
     showToast('Dodano do zmian oczekujących');
-  }));
-});
-
-document.getElementById('referenceLookupInput').addEventListener('input', async (event) => {
-  const q = event.target.value.trim();
-  const box = document.getElementById('referenceLookupResults');
-  if (q.length < 2) {
-    box.innerHTML = '';
-    return;
   }
-  const rows = await api(`/api/search?q=${encodeURIComponent(q)}&type=user`);
-  box.innerHTML = '';
-  rows.forEach((row) => renderLookupItem(box, row, async (item) => {
-    state.referenceUserDn = item.dn || item.distinguishedName;
-    const data = await api(`/api/object?dn=${encodeURIComponent(state.referenceUserDn)}`);
-    state.copyGroups = Array.isArray(data.memberOf) ? data.memberOf : [];
-    document.getElementById('copyGroupsList').innerHTML = state.copyGroups.map((groupDn) => `<div class="form-check"><input class="form-check-input copy-group-check" type="checkbox" checked value="${escapeHtml(groupDn)}"><label class="form-check-label">${escapeHtml(groupDn)}</label></div>`).join('');
+);
+document.getElementById('memberLookupType')?.addEventListener('change', runMemberLookup);
+
+// Users only: the search endpoint is called with type=user and computer
+// accounts (which also carry objectClass=user) are filtered out.
+bindLookup(
+  document.getElementById('referenceLookupInput'),
+  document.getElementById('referenceLookupResults'),
+  async (q) => {
+    const rows = await api(`/api/search?q=${encodeURIComponent(q)}&type=user`);
+    return rows.filter((row) => detectType(row) === 'user');
+  },
+  async (item) => {
     referenceUserModal.hide();
-    copyGroupsModal.show();
-  }));
-});
+    try {
+      await state.userPickHandler?.(item);
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+);
 
 document.getElementById('selectAllCopyGroups').addEventListener('click', () => {
   document.querySelectorAll('.copy-group-check').forEach((x) => { x.checked = true; });
@@ -1242,7 +1717,7 @@ document.getElementById('applyCopyGroupsBtn').addEventListener('click', async ()
   });
   const list = document.getElementById('memberOfList');
   if (list) {
-    list.querySelector('.text-muted')?.remove();
+    list.querySelector(':scope > .text-muted')?.remove();
     selectedGroups.forEach((groupDn) => {
       if (!list.querySelector(`[data-groupdn="${cssEscapeValue(groupDn)}"]`)) {
         list.insertAdjacentHTML('beforeend', renderPendingMemberLine(groupDn, true));
@@ -1254,19 +1729,62 @@ document.getElementById('applyCopyGroupsBtn').addEventListener('click', async ()
   showToast('Grupy dodane do zmian oczekujących');
 });
 
-typeFilter?.addEventListener('change', () => {
-  const isOuSelection = typeFilter.value === 'ou-selection';
-  searchTextWrap?.classList.toggle('d-none', isOuSelection);
-  searchOuWrap?.classList.toggle('d-none', !isOuSelection);
+document.querySelectorAll('input[name="typeFilter"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    if (state.hasSearched) runSearch();
+    searchInput.focus();
+  });
 });
 
-searchBtn.addEventListener('click', runSearch);
-searchInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    runSearch();
-  }
+document.getElementById('searchForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  runSearch();
 });
+
+['searchField', 'searchSubtree', 'searchStatus', 'searchLogon', 'searchDays', 'searchLimit'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', updateActiveFiltersBadge);
+});
+searchOuDn.addEventListener('change', updateActiveFiltersBadge);
+
+document.getElementById('clearSearchOuBtn').addEventListener('click', () => setOuFieldValue('searchOuDn', ''));
+
+document.getElementById('resetFiltersBtn').addEventListener('click', () => {
+  document.getElementById('searchField').value = 'any';
+  document.getElementById('searchSubtree').checked = true;
+  document.getElementById('searchStatus').value = '';
+  document.getElementById('searchLogon').value = '';
+  document.getElementById('searchDays').value = '90';
+  document.getElementById('searchLimit').value = '50';
+  setOuFieldValue('searchOuDn', '');
+});
+
+document.querySelectorAll('#resultsTable th.sortable').forEach((th) => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    const current = state.searchSort;
+    // name/path/status start ascending; last logon starts with most recent.
+    const firstDir = key === 'logon' ? -1 : 1;
+    state.searchSort = current.key === key ? { key, dir: -current.dir } : { key, dir: firstDir };
+    if (state.searchResults.length) renderSearchResults();
+  });
+});
+
+// Page header follows the active sidebar tab.
+document.querySelectorAll('.app-nav-link[data-bs-toggle="tab"]').forEach((tab) => {
+  tab.addEventListener('shown.bs.tab', () => {
+    document.getElementById('pageTitle').textContent = tab.dataset.pageTitle || '';
+    document.getElementById('pageSub').textContent = tab.dataset.pageSub || '';
+    if (tab.id === 'search-tab') searchInput.focus();
+  });
+});
+
+document.querySelectorAll('[data-goto-tab]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const tab = document.getElementById(btn.dataset.gotoTab);
+    if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+  });
+});
+
 
 reportsList?.addEventListener('click', (event) => {
   const button = event.target.closest('.report-link');
@@ -1297,8 +1815,17 @@ portalActivityNext?.addEventListener('click', () => {
 loadReportBtn.addEventListener('click', async () => {
   try {
     const years = Number(document.getElementById('reportYears').value || 2);
+    reportResult.innerHTML = '<div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Generowanie raportu…</div>';
     const data = await api(`/api/reports/stale-logons?years=${years}`);
-    reportResult.innerHTML = `<div class="mb-2">Wynik: <strong>${data.length}</strong> kont</div><pre class="json-view">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+    const rows = data.map((u) => `
+      <tr class="${isAccountDisabled(u) ? 'row-disabled' : ''}">
+        <td><span class="fw-semibold">${escapeHtml(getDisplayName(u))}</span><div class="small text-muted font-monospace">${escapeHtml(u.sAMAccountName || '')}</div></td>
+        <td class="text-nowrap">${u.lastLogonDate ? escapeHtml(new Date(u.lastLogonDate).toLocaleDateString('pl-PL')) : '<span class="text-muted">nigdy</span>'}</td>
+        <td><span class="path-inline" title="${escapeHtml(u.dn || '')}">${dnToPathHtml(parentDn(u.dn), { skipDomain: true })}</span></td>
+      </tr>`).join('');
+    reportResult.innerHTML = `
+      <div class="mb-2">Znaleziono <strong>${data.length}</strong> kont bez logowania od ${years} lat.</div>
+      ${data.length ? `<div class="table-responsive report-table-wrap"><table class="table table-sm table-hover align-middle mb-0"><thead><tr><th>Użytkownik</th><th>Ostatnie logowanie</th><th>Lokalizacja</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}`;
     showToast('Raport wygenerowany');
   } catch (error) {
     showToast(error.message, true);
@@ -1358,88 +1885,274 @@ applyObjectChangesBtn.addEventListener('click', async () => {
     await Promise.all(operations);
     objectModal.hide();
     showToast('Zmiany zostały zastosowane');
-    await runSearch();
+    if (state.hasSearched) await runSearch();
   } catch (error) {
     showToast(error.message, true);
   }
 });
 
+// ===== Kreator nowego użytkownika =====
+const newUserModalEl = document.getElementById('newUserModal');
 const newUserForm = document.getElementById('newUserForm');
 const newUserFirstName = document.getElementById('newUserFirstName');
 const newUserLastName = document.getElementById('newUserLastName');
 const newUserLogin = document.getElementById('newUserLogin');
 const newUserLoginStatus = document.getElementById('newUserLoginStatus');
+const newUserUpnPreview = document.getElementById('newUserUpnPreview');
+const newUserPassword = document.getElementById('newUserPassword');
+const newUserOuDn = document.getElementById('newUserOuDn');
 const newUserSubmitBtn = document.getElementById('newUserSubmitBtn');
+const newUserGroupsList = document.getElementById('newUserGroupsList');
+const LOGIN_HINT = 'Generowany automatycznie po wpisaniu imienia i nazwiska. Można go zmienić.';
+let newUserLoginAvailable = false;
+let newUserLoginSeq = 0;
 
-function setNewUserLoginState(available, message) {
-  if (newUserSubmitBtn) newUserSubmitBtn.disabled = !available;
-  if (newUserLoginStatus) {
-    newUserLoginStatus.textContent = message || '';
-    newUserLoginStatus.classList.toggle('text-danger', !available && Boolean(message));
-    newUserLoginStatus.classList.toggle('text-success', available);
-  }
+function updateNewUserSubmitState() {
+  const ready = newUserLoginAvailable
+    && newUserFirstName.value.trim()
+    && newUserLastName.value.trim()
+    && newUserPassword.value
+    && newUserOuDn.value;
+  newUserSubmitBtn.disabled = !ready;
+}
+
+function setNewUserLoginState(kind, message) {
+  newUserLoginAvailable = kind === 'ok';
+  newUserLoginStatus.textContent = message || LOGIN_HINT;
+  newUserLoginStatus.classList.toggle('text-success', kind === 'ok');
+  newUserLoginStatus.classList.toggle('text-danger', kind === 'error');
+  newUserLogin.classList.toggle('is-valid', kind === 'ok');
+  newUserLogin.classList.toggle('is-invalid', kind === 'error');
+  const login = newUserLogin.value.trim();
+  newUserUpnPreview.innerHTML = login && AD_DOMAIN
+    ? `Nazwa logowania: <span class="font-monospace">${escapeHtml(login)}@${escapeHtml(AD_DOMAIN)}</span>, nazwa obiektu w AD: <span class="font-monospace">${escapeHtml(login)}</span>`
+    : '';
+  updateNewUserSubmitState();
 }
 
 async function checkNewUserLoginAvailability() {
-  const login = newUserLogin?.value.trim() || '';
+  const login = newUserLogin.value.trim();
+  const mySeq = ++newUserLoginSeq;
   if (!login) {
-    setNewUserLoginState(false, '');
+    setNewUserLoginState('idle', '');
+    return;
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(login)) {
+    setNewUserLoginState('error', 'Dozwolone znaki: litery bez polskich znaków, cyfry, kropka, myślnik, podkreślnik.');
+    return;
+  }
+  if (login.length > 20) {
+    setNewUserLoginState('error', 'Login może mieć maksymalnie 20 znaków (limit sAMAccountName).');
     return;
   }
   try {
-    setNewUserLoginState(false, 'Sprawdzanie dostępności…');
+    setNewUserLoginState('checking', 'Sprawdzanie dostępności…');
     const result = await api(`/api/user/login-availability?login=${encodeURIComponent(login)}`);
-    setNewUserLoginState(Boolean(result.available), result.available ? 'Login dostępny.' : 'Login zajęty — wybierz inny.');
+    if (mySeq !== newUserLoginSeq) return;
+    setNewUserLoginState(result.available ? 'ok' : 'error', result.available ? 'Login dostępny.' : 'Login zajęty, wybierz inny.');
   } catch (error) {
-    setNewUserLoginState(false, error.message);
+    if (mySeq === newUserLoginSeq) setNewUserLoginState('error', error.message);
   }
 }
 
-async function autoFillNewUserLogin() {
-  const firstName = newUserFirstName?.value.trim() || '';
-  const lastName = newUserLastName?.value.trim() || '';
+async function autoFillNewUserLogin({ force = false } = {}) {
+  if (state.newUser.loginTouched && !force) return;
+  const firstName = newUserFirstName.value.trim();
+  const lastName = newUserLastName.value.trim();
+  const mySeq = ++newUserLoginSeq;
   if (!firstName || !lastName) {
-    if (newUserLogin) newUserLogin.value = '';
-    setNewUserLoginState(false, '');
+    newUserLogin.value = '';
+    setNewUserLoginState('idle', '');
     return;
   }
   try {
-    setNewUserLoginState(false, 'Sprawdzanie dostępności…');
+    setNewUserLoginState('checking', 'Generowanie loginu…');
     const result = await api(`/api/user/suggest-login?firstName=${encodeURIComponent(firstName)}&lastName=${encodeURIComponent(lastName)}`);
-    if (newUserLogin) newUserLogin.value = result.login || '';
-    setNewUserLoginState(Boolean(result.available), result.available ? 'Login dostępny.' : 'Nie udało się znaleźć wolnego loginu — wybierz ręcznie.');
+    if (mySeq !== newUserLoginSeq) return;
+    newUserLogin.value = result.login || '';
+    setNewUserLoginState(
+      result.available ? 'ok' : 'error',
+      result.available ? 'Login wygenerowany i dostępny. Możesz go zmienić.' : 'Nie znaleziono wolnego loginu, wpisz go ręcznie.'
+    );
   } catch (error) {
-    setNewUserLoginState(false, error.message);
+    if (mySeq === newUserLoginSeq) setNewUserLoginState('error', error.message);
   }
 }
 
-const debouncedAutoFillNewUserLogin = debounce(autoFillNewUserLogin, 350);
+const debouncedAutoFillNewUserLogin = debounce(() => autoFillNewUserLogin(), 400);
 const debouncedCheckNewUserLoginAvailability = debounce(checkNewUserLoginAvailability, 350);
 
-newUserFirstName?.addEventListener('input', debouncedAutoFillNewUserLogin);
-newUserLastName?.addEventListener('input', debouncedAutoFillNewUserLogin);
-newUserLogin?.addEventListener('input', debouncedCheckNewUserLoginAvailability);
-
-document.getElementById('newUserModal')?.addEventListener('show.bs.modal', () => {
-  setNewUserLoginState(false, '');
+newUserFirstName.addEventListener('input', () => {
+  debouncedAutoFillNewUserLogin();
+  updateNewUserSubmitState();
 });
+newUserLastName.addEventListener('input', () => {
+  debouncedAutoFillNewUserLogin();
+  updateNewUserSubmitState();
+});
+newUserLogin.addEventListener('input', () => {
+  // Once the admin edits the login by hand, name changes stop overwriting it.
+  state.newUser.loginTouched = newUserLogin.value.trim() !== '';
+  newUserLoginAvailable = false;
+  updateNewUserSubmitState();
+  debouncedCheckNewUserLoginAvailability();
+});
+document.getElementById('regenerateLoginBtn').addEventListener('click', () => {
+  state.newUser.loginTouched = false;
+  autoFillNewUserLogin({ force: true });
+});
+newUserPassword.addEventListener('input', updateNewUserSubmitState);
+newUserOuDn.addEventListener('change', () => {
+  document.getElementById('newUserOuFromReference').classList.add('d-none');
+  updateNewUserSubmitState();
+});
+
+function generatePassword(length = 14) {
+  const sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%&*?'];
+  const all = sets.join('');
+  const random = (max) => {
+    const buf = new Uint32Array(1);
+    window.crypto.getRandomValues(buf);
+    return buf[0] % max;
+  };
+  const chars = sets.map((set) => set[random(set.length)]);
+  while (chars.length < length) chars.push(all[random(all.length)]);
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = random(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join('');
+}
+
+document.getElementById('toggleNewUserPasswordBtn').addEventListener('click', () => {
+  newUserPassword.type = newUserPassword.type === 'password' ? 'text' : 'password';
+});
+document.getElementById('generateNewUserPasswordBtn').addEventListener('click', () => {
+  newUserPassword.value = generatePassword();
+  newUserPassword.type = 'text';
+  updateNewUserSubmitState();
+});
+
+function renderNewUserGroups() {
+  const groups = Array.from(state.newUser.groups);
+  document.getElementById('newUserGroupsCount').textContent = String(groups.length);
+  if (!groups.length) {
+    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak grup. Wybierz użytkownika wzorcowego lub dodaj grupy ręcznie.</div>';
+    return;
+  }
+  newUserGroupsList.innerHTML = groups
+    .sort((x, y) => dnLabel(x).localeCompare(dnLabel(y), 'pl', { sensitivity: 'base' }))
+    .map((dn) => `<span class="chip" title="${escapeHtml(dn)}">${icon('group')}<span>${escapeHtml(dnLabel(dn))}</span><button type="button" class="chip-remove" data-dn="${escapeHtml(dn)}" aria-label="Usuń grupę" title="Usuń">${icon('x')}</button></span>`)
+    .join('');
+}
+
+newUserGroupsList.addEventListener('click', (event) => {
+  const btn = event.target.closest('.chip-remove');
+  if (!btn) return;
+  state.newUser.groups.delete(btn.dataset.dn);
+  renderNewUserGroups();
+});
+
+document.getElementById('newUserAddGroupBtn').addEventListener('click', () => {
+  openGroupPicker((item) => {
+    state.newUser.groups.add(item.dn || item.distinguishedName);
+    renderNewUserGroups();
+  });
+});
+
+async function applyReferenceUser(item) {
+  const dn = item.dn || item.distinguishedName;
+  const data = await api(`/api/object?dn=${encodeURIComponent(dn)}`);
+  const refDn = toArray(data.distinguishedName)[0] || dn;
+  const name = getDisplayName({ ...item, ...data, objectClass: item.objectClass });
+  const login = toArray(data.sAMAccountName)[0] || item.sAMAccountName || '';
+
+  state.newUser.referenceDn = refDn;
+  document.getElementById('newUserReferenceDn').value = refDn;
+  document.getElementById('newUserReferenceEmpty').classList.add('d-none');
+  document.getElementById('newUserReferenceSelected').classList.remove('d-none');
+  document.getElementById('newUserReferenceAvatar').textContent = initials(name);
+  document.getElementById('newUserReferenceName').textContent = login ? `${name} (${login})` : name;
+  document.getElementById('newUserReferenceMeta').innerHTML = dnToPathHtml(parentDn(refDn));
+
+  setOuFieldValue('newUserOuDn', parentDn(refDn));
+  document.getElementById('newUserOuFromReference').classList.remove('d-none');
+
+  state.newUser.groups = new Set(toArray(data.memberOf));
+  renderNewUserGroups();
+  updateNewUserSubmitState();
+  showToast(`Skopiowano OU i ${state.newUser.groups.size} grup(y) od: ${name}`);
+}
+
+function clearReferenceUser() {
+  state.newUser.referenceDn = null;
+  document.getElementById('newUserReferenceDn').value = '';
+  document.getElementById('newUserReferenceEmpty').classList.remove('d-none');
+  document.getElementById('newUserReferenceSelected').classList.add('d-none');
+  document.getElementById('newUserOuFromReference').classList.add('d-none');
+}
+
+const pickReferenceUser = () => openUserPicker({
+  title: 'Wybierz użytkownika wzorcowego',
+  subtitle: 'Nowe konto otrzyma to samo OU i te same grupy'
+}, applyReferenceUser);
+
+document.getElementById('pickReferenceUserBtn').addEventListener('click', pickReferenceUser);
+document.getElementById('changeReferenceUserBtn').addEventListener('click', pickReferenceUser);
+document.getElementById('clearReferenceUserBtn').addEventListener('click', () => {
+  clearReferenceUser();
+  state.newUser.groups.clear();
+  renderNewUserGroups();
+});
+
+function resetNewUserForm() {
+  newUserForm.reset();
+  newUserForm.querySelector('input[name="accountExpiresDate"]').disabled = true;
+  newUserPassword.type = 'password';
+  state.newUser = { referenceDn: null, groups: new Set(), loginTouched: false };
+  clearReferenceUser();
+  setOuFieldValue('newUserOuDn', '', { silent: true });
+  renderNewUserGroups();
+  setNewUserLoginState('idle', '');
+}
+
+// The picker modals open on top of the wizard without hiding it, so this
+// only fires when the wizard is opened fresh.
+newUserModalEl.addEventListener('show.bs.modal', resetNewUserForm);
+newUserModalEl.addEventListener('shown.bs.modal', () => newUserFirstName.focus());
 
 newUserForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (newUserSubmitBtn.disabled) return;
+  const spinner = document.getElementById('newUserSubmitSpinner');
   try {
+    newUserSubmitBtn.disabled = true;
+    spinner.classList.remove('d-none');
     const payload = Object.fromEntries(new FormData(event.target).entries());
+    payload.login = String(payload.login || '').trim();
+    payload.firstName = String(payload.firstName || '').trim();
+    payload.lastName = String(payload.lastName || '').trim();
     payload.mustChangePasswordAtNextLogon = parseTruthy(payload.mustChangePasswordAtNextLogon);
     payload.userCannotChangePassword = parseTruthy(payload.userCannotChangePassword);
     payload.passwordNeverExpires = parseTruthy(payload.passwordNeverExpires);
     payload.accountDisabled = parseTruthy(payload.accountDisabled);
     payload.accountExpiresMode = payload.accountExpiresModeNewUser || 'never';
+    payload.groups = Array.from(state.newUser.groups);
     delete payload.accountExpiresModeNewUser;
-    await api('/api/user/create', { method: 'POST', body: JSON.stringify(payload) });
-    showToast('Użytkownik utworzony');
-    event.target.reset();
-    setNewUserLoginState(false, '');
+    const result = await api('/api/user/create', { method: 'POST', body: JSON.stringify(payload) });
+    const failed = result.failedGroups || [];
+    if (failed.length) {
+      showToast(`Utworzono ${result.login}, ale nie dodano do ${failed.length} grup(y): ${failed.map((f) => dnLabel(f.groupDn)).join(', ')}`, true);
+    } else {
+      showToast(`Utworzono użytkownika ${result.login}${payload.groups.length ? ` i dodano do ${payload.groups.length} grup(y)` : ''}`);
+    }
+    bootstrap.Modal.getOrCreateInstance(newUserModalEl).hide();
+    searchInput.value = result.login;
   } catch (error) {
     showToast(error.message, true);
+  } finally {
+    spinner.classList.add('d-none');
+    updateNewUserSubmitState();
   }
 });
 
@@ -1452,13 +2165,30 @@ document.querySelectorAll('input[name="accountExpiresModeNewUser"]').forEach((ra
   });
 });
 
+// ===== Nowa grupa =====
+const newGroupName = document.getElementById('newGroupName');
+const newGroupSam = document.getElementById('newGroupSam');
+newGroupName.addEventListener('input', () => {
+  if (!newGroupSam.dataset.touched) newGroupSam.value = newGroupName.value.trim();
+});
+newGroupSam.addEventListener('input', () => {
+  newGroupSam.dataset.touched = newGroupSam.value ? '1' : '';
+});
+
 document.getElementById('newGroupForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  if (!document.getElementById('newGroupOuDn').value) {
+    showToast('Wybierz OU dla nowej grupy', true);
+    return;
+  }
   try {
     const payload = Object.fromEntries(new FormData(event.target).entries());
     await api('/api/group/create', { method: 'POST', body: JSON.stringify(payload) });
-    showToast('Grupa utworzona');
+    showToast(`Utworzono grupę ${payload.name}`);
     event.target.reset();
+    delete newGroupSam.dataset.touched;
+    setOuFieldValue('newGroupOuDn', '', { silent: true });
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('newGroupModal')).hide();
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1477,6 +2207,30 @@ function cssEscapeValue(value) {
   if (window.CSS?.escape) return window.CSS.escape(value);
   return String(value).replaceAll('"', '\\"');
 }
+
+// Stacked modals (e.g. OU picker over the user wizard): put each new modal and
+// its backdrop above the previous one, and keep the body scroll-lock while
+// any modal is still open.
+document.addEventListener('show.bs.modal', (event) => {
+  const openCount = document.querySelectorAll('.modal.show').length;
+  if (!openCount) return;
+  event.target.style.zIndex = String(1055 + openCount * 10);
+  setTimeout(() => {
+    const backdrops = document.querySelectorAll('.modal-backdrop');
+    const last = backdrops[backdrops.length - 1];
+    if (last) last.style.zIndex = String(1054 + openCount * 10);
+  });
+});
+document.addEventListener('hidden.bs.modal', (event) => {
+  event.target.style.zIndex = '';
+  const stillOpen = Array.from(document.querySelectorAll('.modal.show'));
+  if (stillOpen.length) {
+    document.body.classList.add('modal-open');
+    // Return focus to the modal underneath so Escape / Tab keep working there.
+    const top = stillOpen.sort((x, y) => Number(y.style.zIndex || 1055) - Number(x.style.zIndex || 1055))[0];
+    if (!top.contains(document.activeElement)) top.focus();
+  }
+});
 
 document.querySelectorAll('[data-bs-toggle="popover"]').forEach((el) => {
   // eslint-disable-next-line no-new

@@ -2,14 +2,31 @@
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Wybór OU</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-folder-open"/></svg></span>
+          <div>
+            <h5 class="modal-title">Wybierz jednostkę organizacyjną</h5>
+            <div class="modal-subtitle">Rozwiń drzewo lub wyszukaj OU po nazwie</div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body">
-        <div id="ouTree" class="ou-tree"></div>
+      <div class="ou-picker-search">
+        <div class="search-input-wrap">
+          <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+          <input id="ouSearchInput" class="form-control" placeholder="Szukaj OU, np. kardiologia…" autocomplete="off" />
+        </div>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-primary" id="confirmOuBtn">Wybierz</button>
+      <div class="modal-body ou-picker-body">
+        <div id="ouTree" class="ou-tree" role="tree"></div>
+        <div id="ouSearchResults" class="ou-search-results d-none"></div>
+      </div>
+      <div class="modal-footer justify-content-between">
+        <div class="ou-selected-path" id="ouSelectedPath"><span class="text-muted">Nie wybrano OU</span></div>
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+          <button type="button" class="btn btn-primary" id="confirmOuBtn" disabled>Wybierz</button>
+        </div>
       </div>
     </div>
   </div>

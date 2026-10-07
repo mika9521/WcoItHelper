@@ -2,13 +2,20 @@
   <div class="modal-dialog modal-xl modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title" id="objectTitle">Szczegóły obiektu</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon" id="objectTitleIcon"><svg class="icon"><use href="#i-info"/></svg></span>
+          <div>
+            <h5 class="modal-title" id="objectTitle">Szczegóły obiektu</h5>
+            <div class="modal-subtitle" id="objectSubtitle"></div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body" id="objectBody"></div>
       <div class="modal-footer">
+        <div class="me-auto small text-muted" id="pendingChangesInfo"></div>
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Zamknij</button>
-        <button type="button" class="btn btn-primary d-none" id="applyObjectChangesBtn">Zastosuj</button>
+        <button type="button" class="btn btn-primary d-none" id="applyObjectChangesBtn">Zastosuj zmiany</button>
       </div>
     </div>
   </div>
@@ -18,23 +25,30 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Potwierdź blokadę konta</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon modal-title-icon-danger"><svg class="icon"><use href="#i-lock"/></svg></span>
+          <div>
+            <h5 class="modal-title">Zablokuj konto</h5>
+            <div class="modal-subtitle">Soft delete</div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <p class="mb-2">Wykonasz <strong>soft delete</strong> dla konta:</p>
-        <div class="small text-break text-muted mb-3" id="softDeleteTargetDn">-</div>
-        <ul class="mb-0">
-          <li>konto zostanie wyłączone,</li>
-          <li>konto zostanie przeniesione do OU:</li>
-        </ul>
-        <div class="small text-break mt-2">
-          <code>OU=zablokowane_konta,DC=eskulap,DC=local</code>
-        </div>
+        <div class="dn-box mb-3" id="softDeleteTargetDn">-</div>
+        <p class="mb-2">Po potwierdzeniu konto zostanie:</p>
+        <ol class="mb-3">
+          <li>wyłączone,</li>
+          <li>usunięte ze wszystkich grup,</li>
+          <li>przeniesione do OU <code>zablokowane_konta</code>.</li>
+        </ol>
+        <div class="form-section-title mb-2">Grupy do usunięcia <span class="badge rounded-pill text-bg-light border ms-1" id="softDeleteGroupsCount">0</span></div>
+        <div class="soft-delete-groups mb-3" id="softDeleteGroupsList"></div>
+        <div class="small text-muted">Lista grup zostanie zapisana w logach obiektu. Przycisk <strong>Odblokuj</strong> włącza konto i przenosi je z powrotem, ale grup nie przywraca.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
-        <button type="button" class="btn btn-danger" id="confirmSoftDeleteBtn">Potwierdź blokadę</button>
+        <button type="button" class="btn btn-danger" id="confirmSoftDeleteBtn">Zablokuj konto</button>
       </div>
     </div>
   </div>
@@ -44,11 +58,14 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Konto zostało usunięte (soft delete)</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon modal-title-icon-success"><svg class="icon"><use href="#i-check"/></svg></span>
+          <h5 class="modal-title">Konto zablokowane</h5>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body">
-        Konto zostało zablokowane i przeniesione do OU <code>zablokowane_konta</code>.
+      <div class="modal-body" id="softDeleteSuccessBody">
+        Konto zostało wyłączone i przeniesione do OU <code>zablokowane_konta</code>.
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-primary" data-bs-dismiss="modal">OK</button>
@@ -61,22 +78,58 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h5 class="modal-title">Odblokuj konto</h5>
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon modal-title-icon-success"><svg class="icon"><use href="#i-unlock"/></svg></span>
+          <div>
+            <h5 class="modal-title">Odblokuj konto</h5>
+            <div class="modal-subtitle">Włączenie i przeniesienie z OU zablokowane_konta</div>
+          </div>
+        </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <p class="mb-2">Odblokujesz (włączysz) konto:</p>
-        <div class="small text-break text-muted mb-3" id="unlockTargetDnLabel">-</div>
-        <label class="form-label">Docelowe OU po odblokowaniu</label>
-        <div class="input-group">
-          <input id="unlockTargetOuDn" class="form-control" placeholder="Wybierz OU..." readonly required />
-          <button type="button" class="btn btn-outline-secondary pick-ou-btn" data-target-input="unlockTargetOuDn" data-ou-only="1">Wybierz OU</button>
+        <div class="dn-box mb-3" id="unlockTargetDnLabel">-</div>
+        <label class="form-label">Docelowe OU po odblokowaniu <span class="text-danger">*</span></label>
+        <div class="ou-field" data-target-input="unlockTargetOuDn">
+          <input type="hidden" id="unlockTargetOuDn" />
+          <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="unlockTargetOuDn">
+            <svg class="icon"><use href="#i-folder"/></svg>
+            <span class="ou-field-text" data-placeholder="Wybierz jednostkę organizacyjną…">Wybierz jednostkę organizacyjną…</span>
+            <svg class="icon ou-field-caret"><use href="#i-chevron-down"/></svg>
+          </button>
         </div>
-        <div class="form-text mt-2">Konto zostanie włączone i przeniesione do wybranego OU.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
         <button type="button" class="btn btn-success" id="confirmUnlockBtn">Odblokuj konto</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="certDeleteModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon modal-title-icon-danger"><svg class="icon"><use href="#i-key"/></svg></span>
+          <div>
+            <h5 class="modal-title">Usuń certyfikat</h5>
+            <div class="modal-subtitle">Usunięcie z atrybutu userCertificate konta</div>
+          </div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <dl class="cert-summary" id="certDeleteSummary"></dl>
+        <div class="alert alert-warning small mb-0">
+          Certyfikat zostanie usunięty z konta w AD, więc logowanie nim kartą inteligentną przestanie działać.
+          Nie jest to odwołanie w urzędzie certyfikacji (CA). Jeśli certyfikat ma trafić na listę CRL, odwołaj go także w konsoli CA.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+        <button type="button" class="btn btn-danger" id="confirmCertDeleteBtn">Usuń certyfikat</button>
       </div>
     </div>
   </div>

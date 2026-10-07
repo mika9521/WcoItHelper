@@ -3,72 +3,50 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Logowanie - Portal Zarządzania AD</title>
+  <title>Logowanie – Portal Zarządzania AD</title>
   <link href="/bootstrap/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/app.css" />
   <style>
-    body {
-      background: linear-gradient(135deg, #111827 0%, #312e81 55%, #4f46e5 100%);
-    }
-    .login-card {
-      border: none;
-      border-radius: 1rem;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
-    }
-    .login-icon {
-      width: 3rem;
-      height: 3rem;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 1.1rem;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-      color: #4f46e5;
-      border-radius: 0.75rem;
-      background: rgba(79, 70, 229, 0.12);
-      margin-bottom: 0.75rem;
-    }
-    .btn-primary {
-      background-color: #4f46e5;
-      border-color: #4f46e5;
-    }
-    .btn-primary:hover,
-    .btn-primary:active {
-      background-color: #4338ca !important;
-      border-color: #4338ca !important;
-    }
-    .form-control:focus {
-      border-color: #4f46e5;
-      box-shadow: 0 0 0 0.25rem rgba(79, 70, 229, 0.15);
-    }
-    a { color: #4f46e5; }
+    body { background: #0f172a; min-height: 100vh; }
+    .login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; background: radial-gradient(1200px 600px at 20% -10%, rgba(59, 111, 240, 0.35), transparent 60%), #0f172a; }
+    .login-card { width: 100%; max-width: 400px; background: #fff; border-radius: 14px; box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.5); padding: 2rem; }
+    .login-mark { width: 2.8rem; height: 2.8rem; border-radius: 10px; background: linear-gradient(135deg, #3b6ff0, #2557d6); color: #fff; display: grid; place-items: center; font-size: 1.35rem; margin-bottom: 1rem; box-shadow: 0 6px 14px rgba(37, 87, 214, 0.4); }
+    .login-title { font-size: 1.3rem; font-weight: 650; margin: 0; }
+    .login-sub { color: var(--ink-500); font-size: 0.875rem; margin: 0.25rem 0 1.5rem; }
+    .login-foot { color: #64748b; font-size: 0.78rem; text-align: center; margin-top: 1.25rem; }
   </style>
 </head>
-<body class="d-flex align-items-center vh-100">
-  <main class="container">
-    <section class="card login-card mx-auto" style="max-width: 420px;">
-      <div class="card-body p-4">
-        <div class="text-center">
-          <div class="login-icon">AD</div>
-          <h1 class="h4 mb-1">Portal Zarządzania AD</h1>
-          <p class="text-muted small mb-4">Zaloguj się poświadczeniami domenowymi</p>
-        </div>
+<body>
+  <%- include('partials/icons') %>
+  <main class="login-wrap">
+    <div>
+      <section class="login-card">
+        <div class="login-mark"><svg class="icon"><use href="#i-shield"/></svg></div>
+        <h1 class="login-title">Portal Zarządzania AD</h1>
+        <p class="login-sub">Zaloguj się poświadczeniami domenowymi</p>
         <% if (error) { %>
-          <div class="alert alert-danger"><%= error %></div>
+          <div class="alert alert-danger py-2 small"><%= error %></div>
         <% } %>
         <form method="post" action="/login">
           <div class="mb-3">
-            <label class="form-label">Login</label>
-            <input class="form-control" name="login" required autofocus />
+            <label class="form-label" for="login">Login</label>
+            <div class="search-input-wrap">
+              <svg class="icon search-input-icon"><use href="#i-user"/></svg>
+              <input class="form-control" id="login" name="login" placeholder="np. kowalski.j" required autofocus autocomplete="username" />
+            </div>
           </div>
-          <div class="mb-3">
-            <label class="form-label">Hasło</label>
-            <input class="form-control" type="password" name="password" required />
+          <div class="mb-4">
+            <label class="form-label" for="password">Hasło</label>
+            <div class="search-input-wrap">
+              <svg class="icon search-input-icon"><use href="#i-lock"/></svg>
+              <input class="form-control" id="password" type="password" name="password" required autocomplete="current-password" />
+            </div>
           </div>
-          <button class="btn btn-primary w-100">Zaloguj</button>
+          <button class="btn btn-primary w-100 py-2">Zaloguj się</button>
         </form>
-      </div>
-    </section>
+      </section>
+      <div class="login-foot">Dostęp tylko dla uprawnionych administratorów</div>
+    </div>
   </main>
 </body>
 </html>

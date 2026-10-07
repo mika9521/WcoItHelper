@@ -83,13 +83,14 @@ async function searchObjects(query, type, authContext = null) {
   };
 
   const typeFilter = filters[type] || filters.all;
-  const term = escapeFilter(query);
+  const pattern = toLdapPattern(query);
+  const termFilter = pattern ? `(|(cn=${pattern})(sAMAccountName=${pattern})(displayName=${pattern}))` : '';
 
   return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(env.ad.baseDn, {
       scope: 'sub',
       sizeLimit: 50,
-      filter: `(&${typeFilter}(|(cn=*${term}*)(sAMAccountName=*${term}*)(displayName=*${term}*)))`,
+      filter: `(&${typeFilter}${termFilter})`,
       attributes: DEFAULT_ATTRS
     });
 
@@ -115,6 +116,82 @@ async function searchObjectsInOu(ouDn, type = 'all', authContext = null) {
       attributes: DEFAULT_ATTRS
     });
     return searchEntries.map(normalizeObject);
+  });
+}
+
+const SEARCH_FIELDS = {
+  any: ['cn', 'sAMAccountName', 'displayName', 'givenName', 'sn', 'mail'],
+  sAMAccountName: ['sAMAccountName'],
+  displayName: ['displayName', 'cn'],
+  givenName: ['givenName'],
+  sn: ['sn'],
+  mail: ['mail', 'userPrincipalName'],
+  description: ['description'],
+  department: ['department'],
+  title: ['title']
+};
+
+const SEARCH_TYPE_FILTERS = {
+  // Computer accounts also carry objectClass=user, hence objectCategory.
+  user: '(&(objectCategory=person)(objectClass=user))',
+  computer: '(objectClass=computer)',
+  group: '(objectClass=group)',
+  all: '(|(objectClass=user)(objectClass=computer)(objectClass=group))'
+};
+
+const SEARCH_LIMITS = [50, 100, 250, 500];
+
+// SQL-LIKE style pattern -> LDAP substring value. "%" (or "*") is the
+// wildcard; without one the term is matched anywhere ("contains"), so
+// "kow" == "%kow%", "kow%" = starts with, "%ski" = ends with.
+function toLdapPattern(term) {
+  const raw = String(term || '').trim();
+  if (!raw) return '';
+  if (!/[%*]/.test(raw)) return `*${escapeFilter(raw)}*`;
+  const pattern = raw
+    .split(/[%*]/)
+    .map((part) => escapeFilter(part))
+    .join('*')
+    .replace(/\*{2,}/g, '*');
+  return pattern === '*' ? '' : pattern;
+}
+
+function daysAgoFileTime(days) {
+  return String((Date.now() - days * 86400000 + 11644473600000) * 10000);
+}
+
+async function advancedSearch(options = {}, authContext = null) {
+  const type = SEARCH_TYPE_FILTERS[options.type] ? options.type : 'all';
+  const fields = SEARCH_FIELDS[options.field] || SEARCH_FIELDS.any;
+  const pattern = toLdapPattern(options.q);
+  const limit = SEARCH_LIMITS.includes(Number(options.limit)) ? Number(options.limit) : 50;
+  const baseDn = options.ouDn || env.ad.baseDn;
+  const scope = options.subtree === false ? 'one' : 'sub';
+  const days = Math.max(1, Math.min(Number(options.days) || 90, 36500));
+
+  const parts = [SEARCH_TYPE_FILTERS[type]];
+  if (pattern) {
+    parts.push(`(|${fields.map((attr) => `(${attr}=${pattern})`).join('')})`);
+  }
+  if (options.status === 'enabled') parts.push('(!(userAccountControl:1.2.840.113556.1.4.803:=2))');
+  if (options.status === 'disabled') parts.push('(userAccountControl:1.2.840.113556.1.4.803:=2)');
+  // lastLogonTimestamp is replicated to every DC (with up to ~14 days lag),
+  // which makes it the attribute AD itself recommends for stale-account queries.
+  if (options.logon === 'older') parts.push(`(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<=${daysAgoFileTime(days)}))`);
+  if (options.logon === 'within') parts.push(`(lastLogonTimestamp>=${daysAgoFileTime(days)})`);
+  if (options.logon === 'never') parts.push('(!(lastLogonTimestamp=*))');
+
+  const filter = `(&${parts.join('')})`;
+
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(baseDn, {
+      scope,
+      sizeLimit: limit + 1,
+      filter,
+      attributes: DEFAULT_ATTRS
+    });
+    const rows = searchEntries.slice(0, limit).map(normalizeObject);
+    return { rows, truncated: searchEntries.length > limit, limit, filter };
   });
 }
 
@@ -170,7 +247,6 @@ async function createUser(payload, authContext = null) {
     ouDn,
     firstName,
     lastName,
-    login,
     password,
     description,
     mustChangePasswordAtNextLogon,
@@ -180,27 +256,31 @@ async function createUser(payload, authContext = null) {
     accountExpiresMode,
     accountExpiresDate
   } = payload;
+  const login = String(payload.login || '').trim();
+  const groups = Array.isArray(payload.groups) ? payload.groups.filter(Boolean) : [];
 
-  // The AD object name (cn/RDN) is set to the login rather than the full
-  // name, so admins no longer have to rename the object after creation.
-  const cn = login;
+  if (!login) throw new AppError('Brak loginu użytkownika', 400);
+  if (!ouDn) throw new AppError('Nie wybrano docelowego OU', 400);
+  if (!firstName || !lastName) throw new AppError('Imię i nazwisko są wymagane', 400);
+  if (!password) throw new AppError('Hasło jest wymagane', 400);
+
   const displayName = `${firstName} ${lastName}`;
-  const dn = `CN=${cn},${ouDn}`;
-  const domain = env.ad.baseDn
-    .split(',')
-    .map((p) => p.replace(/^DC=/i, ''))
-    .join('.');
+  // The AD object name (cn / RDN, the "Name" column in ADUC) is the login,
+  // e.g. "kowalski.j", not the full name. Creating it under the login right
+  // away (instead of creating "Jan Kowalski" and renaming it) also avoids a
+  // collision when a namesake already exists in the same OU.
+  const dn = `CN=${escapeDnValue(login)},${ouDn}`;
 
   return withAdaptiveBind(authContext, async (client) => {
     await client.add(dn, {
       objectClass: ['top', 'person', 'organizationalPerson', 'user'],
-      cn,
+      cn: login,
       givenName: firstName,
       sn: lastName,
       displayName,
       sAMAccountName: login,
-      userPrincipalName: `${login}@${domain}`,
-      description
+      userPrincipalName: `${login}@${getDomainFromBaseDn()}`,
+      ...(description ? { description } : {})
     });
 
     await client.modify(dn, toChange('replace', 'unicodePwd', encodePassword(password)));
@@ -229,8 +309,37 @@ async function createUser(payload, authContext = null) {
       await client.modify(dn, toChange('replace', 'accountExpires', ACCOUNT_NEVER_EXPIRES));
     }
 
-    return { dn, login };
+    const addedGroups = [];
+    const failedGroups = [];
+    for (const groupDn of groups) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await client.modify(groupDn, toChange('add', 'member', dn));
+        addedGroups.push(groupDn);
+      } catch (error) {
+        failedGroups.push({ groupDn, message: error.message });
+      }
+    }
+
+    return { dn, login, addedGroups, failedGroups };
   });
+}
+
+function getDomainFromBaseDn() {
+  return String(env.ad.baseDn || '')
+    .split(',')
+    .map((p) => p.trim().replace(/^DC=/i, ''))
+    .filter(Boolean)
+    .join('.');
+}
+
+// RFC 4514 escaping for a single RDN attribute value.
+function escapeDnValue(value = '') {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/([,+"<>;=])/g, '\\$1')
+    .replace(/^([ #])/, '\\$1')
+    .replace(/ $/, '\\ ');
 }
 
 function encodePassword(password) {
@@ -314,18 +423,43 @@ async function softDeleteAccount(objectDn, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(objectDn, {
       scope: 'base',
-      attributes: ['userAccountControl']
+      attributes: ['userAccountControl', 'memberOf']
     });
     if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
+
+    // Snapshot of group membership taken before anything changes, so the
+    // audit log keeps what the account belonged to. (The primary group,
+    // usually Domain Users, is not listed in memberOf and stays as is.)
+    const rawMemberOf = searchEntries[0].memberOf;
+    const groupsBefore = (Array.isArray(rawMemberOf) ? rawMemberOf : rawMemberOf ? [rawMemberOf] : []).map(String);
 
     const current = Number(searchEntries[0].userAccountControl || 512);
     const next = current | 0x0002;
     await client.modify(objectDn, toChange('replace', 'userAccountControl', String(next)));
 
+    const removedGroups = [];
+    const failedGroups = [];
+    for (const groupDn of groupsBefore) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await client.modify(groupDn, toChange('delete', 'member', objectDn));
+        removedGroups.push(groupDn);
+      } catch (error) {
+        failedGroups.push({ groupDn, message: error.message });
+      }
+    }
+
     const rdn = objectDn.split(',')[0];
     await client.modifyDN(objectDn, `${rdn},${BLOCKED_ACCOUNTS_OU_DN}`);
 
-    return { updated: true, movedTo: BLOCKED_ACCOUNTS_OU_DN };
+    return {
+      updated: true,
+      movedTo: BLOCKED_ACCOUNTS_OU_DN,
+      newDn: `${rdn},${BLOCKED_ACCOUNTS_OU_DN}`,
+      groupsBefore,
+      removedGroups,
+      failedGroups
+    };
   });
 }
 
@@ -444,58 +578,79 @@ function extractCertificateCn(subject) {
   return match ? match[1] : '';
 }
 
+function parseCertificate(buffer, index) {
+  try {
+    const cert = new X509Certificate(buffer);
+    const validTo = new Date(cert.validTo);
+    const validFrom = new Date(cert.validFrom);
+    const now = Date.now();
+    return {
+      index,
+      subject: cert.subject,
+      subjectCn: extractCertificateCn(cert.subject),
+      issuer: cert.issuer,
+      issuerCn: extractCertificateCn(cert.issuer),
+      subjectAltName: cert.subjectAltName || '',
+      validFrom: validFrom.toISOString(),
+      validTo: validTo.toISOString(),
+      expired: validTo.getTime() < now,
+      notYetValid: validFrom.getTime() > now,
+      serialNumber: cert.serialNumber,
+      thumbprint: String(cert.fingerprint || '').replace(/:/g, ''),
+      fingerprint256: cert.fingerprint256
+    };
+  } catch (error) {
+    return {
+      index,
+      subject: 'Nie udało się odczytać certyfikatu',
+      subjectCn: '',
+      issuer: '',
+      issuerCn: '',
+      subjectAltName: '',
+      validFrom: '',
+      validTo: '',
+      expired: false,
+      notYetValid: false,
+      serialNumber: '',
+      thumbprint: '',
+      fingerprint256: require('crypto').createHash('sha256').update(buffer).digest('hex'),
+      parseError: error.message
+    };
+  }
+}
+
+// userCertificate holds binary DER values; without explicitBufferAttributes
+// ldapts decodes them as UTF-8 strings, which corrupts them.
+async function readUserCertificateBuffers(client, userDn) {
+  const { searchEntries } = await client.search(userDn, {
+    scope: 'base',
+    attributes: ['userCertificate'],
+    explicitBufferAttributes: ['userCertificate']
+  });
+  if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
+  const raw = searchEntries[0].userCertificate;
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return list.map((value) => (Buffer.isBuffer(value) ? value : Buffer.from(value)));
+}
+
 async function getUserCertificates(userDn, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
-    const { searchEntries } = await client.search(userDn, {
-      scope: 'base',
-      attributes: ['userCertificate']
-    });
-    if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
-
-    const raw = searchEntries[0].userCertificate;
-    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
-
-    return list.map((value, index) => {
-      const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
-      try {
-        const cert = new X509Certificate(buffer);
-        return {
-          index,
-          subject: cert.subject,
-          subjectCn: extractCertificateCn(cert.subject),
-          issuer: cert.issuer,
-          issuerCn: extractCertificateCn(cert.issuer),
-          validFrom: cert.validFrom,
-          validTo: cert.validTo,
-          serialNumber: cert.serialNumber,
-          fingerprint256: cert.fingerprint256,
-          raw: buffer.toString('base64')
-        };
-      } catch (error) {
-        return {
-          index,
-          subject: 'Nie udało się odczytać certyfikatu',
-          subjectCn: '',
-          issuer: '',
-          issuerCn: '',
-          validFrom: '',
-          validTo: '',
-          serialNumber: '',
-          fingerprint256: '',
-          raw: buffer.toString('base64'),
-          parseError: error.message
-        };
-      }
-    });
+    const buffers = await readUserCertificateBuffers(client, userDn);
+    return buffers.map((buffer, index) => parseCertificate(buffer, index));
   });
 }
 
-async function revokeUserCertificate(userDn, certificateBase64, authContext = null) {
-  if (!certificateBase64) throw new AppError('Brak danych certyfikatu do odwołania', 400);
-  const buffer = Buffer.from(certificateBase64, 'base64');
+// Removes one certificate (matched by its SHA-256 fingerprint) from the
+// account's userCertificate attribute. This does not revoke it at the CA.
+async function deleteUserCertificate(userDn, fingerprint256, authContext = null) {
+  if (!fingerprint256) throw new AppError('Brak identyfikatora certyfikatu do usunięcia', 400);
   return withAdaptiveBind(authContext, async (client) => {
-    await client.modify(userDn, toChange('delete', 'userCertificate', buffer));
-    return { updated: true };
+    const buffers = await readUserCertificateBuffers(client, userDn);
+    const index = buffers.findIndex((buffer, i) => parseCertificate(buffer, i).fingerprint256 === fingerprint256);
+    if (index === -1) throw new AppError('Nie znaleziono certyfikatu na koncie (mógł zostać już usunięty)', 404);
+    const certificate = parseCertificate(buffers[index], index);
+    await client.modify(userDn, toChange('delete', 'userCertificate', buffers[index]));
+    return { deleted: true, certificate };
   });
 }
 
@@ -508,6 +663,20 @@ async function listOuChildren(parentDn = env.ad.baseDn, onlyOu = false, authCont
       scope: 'one',
       filter,
       attributes: ['dn', 'cn', 'displayName', 'distinguishedName', 'objectClass', 'name', 'ou']
+    });
+    return searchEntries.map((entry) => normalizeObject(entry));
+  });
+}
+
+async function searchOus(query, authContext = null) {
+  const term = escapeFilter(String(query || '').trim());
+  if (!term) return [];
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(env.ad.baseDn, {
+      scope: 'sub',
+      sizeLimit: 100,
+      filter: `(&(|(objectClass=organizationalUnit)(objectClass=container))(|(ou=*${term}*)(name=*${term}*)(description=*${term}*)))`,
+      attributes: ['dn', 'cn', 'distinguishedName', 'objectClass', 'name', 'ou', 'description']
     });
     return searchEntries.map((entry) => normalizeObject(entry));
   });
@@ -572,6 +741,7 @@ module.exports = {
   authenticate,
   searchObjects,
   searchObjectsInOu,
+  advancedSearch,
   getObjectDetails,
   updateUserGroups,
   updateGroupMembers,
@@ -584,10 +754,12 @@ module.exports = {
   unlockAccount,
   updateUserSettings,
   listOuChildren,
+  searchOus,
+  getDomainFromBaseDn,
   getDashboardStats,
   getBitlockerKeys,
   isSamAccountNameTaken,
   suggestLogin,
   getUserCertificates,
-  revokeUserCertificate
+  deleteUserCertificate
 };
