@@ -304,8 +304,11 @@
             <section class="card">
               <div class="card-body p-2">
                 <div class="report-nav" id="reportsList">
-                  <button class="report-link active" data-report="stale-logons" type="button">
-                    <svg class="icon"><use href="#i-clock"/></svg><span>Nieaktywne konta</span>
+                  <button class="report-link active" data-report="stale-users" type="button">
+                    <svg class="icon"><use href="#i-user"/></svg><span>Nieaktywni użytkownicy</span>
+                  </button>
+                  <button class="report-link" data-report="stale-computers" type="button">
+                    <svg class="icon"><use href="#i-computer"/></svg><span>Nieaktywne komputery</span>
                   </button>
                   <button class="report-link" data-report="portal-activity" type="button">
                     <svg class="icon"><use href="#i-activity"/></svg><span>Aktywność portalu</span>
@@ -319,22 +322,55 @@
           </div>
 
           <div class="col-lg-9">
-            <section class="card report-page" data-report-page="stale-logons">
-              <div class="card-header">Nieaktywne konta AD</div>
+<% [
+  { id: 'stale-users', kind: 'user', title: 'Nieaktywne konta użytkowników', hint: 'Włączone konta użytkowników bez logowania w podanym okresie. Konta utworzone w tym okresie są pomijane.' },
+  { id: 'stale-computers', kind: 'computer', title: 'Nieaktywne komputery', hint: 'Włączone konta komputerów bez logowania do domeny w podanym okresie. Aktywny komputer zmienia też hasło konta co ok. 30 dni (kolumna „Hasło konta”).' }
+].forEach((r, idx) => { %>
+            <section class="card report-page stale-report <%= idx ? 'd-none' : '' %>" data-report-page="<%= r.id %>" data-kind="<%= r.kind %>">
+              <div class="card-header">Raport: <%= r.title %></div>
               <div class="card-body">
-                <div class="d-flex flex-wrap align-items-end gap-2 mb-3">
-                  <div>
-                    <label class="form-label small text-muted mb-1" for="reportYears">Brak logowania od</label>
-                    <div class="input-group" style="max-width: 220px;">
-                      <input id="reportYears" type="number" class="form-control" value="2" min="1" />
-                      <span class="input-group-text">lat</span>
+                <div class="field-hint mt-0 mb-3"><%= r.hint %></div>
+                <form class="row g-3 align-items-end mb-3 stale-form">
+                  <div class="col-md-auto">
+                    <label class="form-label">Brak logowania od</label>
+                    <div class="input-group stale-period">
+                      <input type="number" class="form-control stale-amount" value="<%= r.kind === 'computer' ? 90 : 2 %>" min="1" />
+                      <select class="form-select stale-unit">
+                        <option value="1" <%= r.kind === 'computer' ? 'selected' : '' %>>dni</option>
+                        <option value="30">miesięcy</option>
+                        <option value="365" <%= r.kind === 'computer' ? '' : 'selected' %>>lat</option>
+                      </select>
                     </div>
                   </div>
-                  <button class="btn btn-primary" id="loadReportBtn">Generuj raport</button>
-                </div>
-                <div id="reportResult" class="small"></div>
+                  <div class="col-md">
+                    <label class="form-label">Zakres</label>
+                    <div class="d-flex gap-2 align-items-center">
+                      <div class="ou-field flex-grow-1" data-target-input="staleOu-<%= r.kind %>">
+                        <input type="hidden" id="staleOu-<%= r.kind %>" class="stale-ou" />
+                        <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="staleOu-<%= r.kind %>">
+                          <svg class="icon"><use href="#i-folder"/></svg>
+                          <span class="ou-field-text" data-placeholder="Cała domena">Cała domena</span>
+                          <svg class="icon ou-field-caret"><use href="#i-chevron-down"/></svg>
+                        </button>
+                      </div>
+                      <button type="button" class="btn-icon stale-clear-ou" title="Cała domena" aria-label="Wyczyść OU"><svg class="icon"><use href="#i-x"/></svg></button>
+                    </div>
+                  </div>
+                  <div class="col-12 d-flex flex-wrap align-items-center gap-3">
+                    <div class="form-check m-0">
+                      <input class="form-check-input stale-include-disabled" type="checkbox" id="staleDisabled-<%= r.kind %>">
+                      <label class="form-check-label" for="staleDisabled-<%= r.kind %>">Pokaż także wyłączone konta</label>
+                    </div>
+                    <div class="ms-auto d-flex gap-2">
+                      <button type="button" class="btn btn-outline-secondary stale-export" disabled>Eksportuj CSV</button>
+                      <button type="submit" class="btn btn-primary">Generuj raport</button>
+                    </div>
+                  </div>
+                </form>
+                <div class="stale-result small"></div>
               </div>
             </section>
+<% }) %>
 
             <section class="card report-page d-none" data-report-page="portal-activity">
               <div class="card-header">Aktywność portalu</div>

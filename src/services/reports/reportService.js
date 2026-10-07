@@ -1,23 +1,34 @@
-const { searchObjects } = require('../ad/adService');
+const { staleAccounts } = require('../ad/adService');
 
 function fileTimeToDate(fileTime) {
   if (!fileTime || fileTime === '0') return null;
-  const windowsEpoch = 116444736000000000n;
-  const ms = Number((BigInt(fileTime) - windowsEpoch) / 10000n);
-  return new Date(ms);
+  try {
+    const windowsEpoch = 116444736000000000n;
+    const ms = Number((BigInt(fileTime) - windowsEpoch) / 10000n);
+    return ms > 0 ? new Date(ms) : null;
+  } catch {
+    return null;
+  }
 }
 
-async function staleLogons(years = 2, authContext = null) {
-  const users = await searchObjects('', 'user', authContext);
-  const threshold = new Date();
-  threshold.setFullYear(threshold.getFullYear() - years);
+// Newest of lastLogonTimestamp (replicated) and lastLogon (answering DC).
+function lastLogonDate(obj) {
+  const dates = [fileTimeToDate(obj.lastLogonTimestamp), fileTimeToDate(obj.lastLogon)].filter(Boolean);
+  return dates.length ? new Date(Math.max(...dates.map((d) => d.getTime()))) : null;
+}
 
-  return users
-    .map((u) => ({
-      ...u,
-      lastLogonDate: fileTimeToDate(u.lastLogonTimestamp)
+async function staleLogons({ kind = 'user', days = 730, includeDisabled = false, ouDn = '' } = {}, authContext = null) {
+  const rows = await staleAccounts(kind, days, { includeDisabled, ouDn }, authContext);
+  const threshold = Date.now() - days * 86400000;
+  return rows
+    .map((obj) => ({
+      ...obj,
+      lastLogonDate: lastLogonDate(obj),
+      pwdLastSetDate: fileTimeToDate(obj.pwdLastSet)
     }))
-    .filter((u) => !u.lastLogonDate || u.lastLogonDate < threshold);
+    // lastLogon from the answering DC can be newer than the replicated value.
+    .filter((obj) => !obj.lastLogonDate || obj.lastLogonDate.getTime() < threshold)
+    .sort((a, b) => (a.lastLogonDate?.getTime() ?? 0) - (b.lastLogonDate?.getTime() ?? 0));
 }
 
 module.exports = { staleLogons };

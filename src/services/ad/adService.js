@@ -196,6 +196,36 @@ async function advancedSearch(options = {}, authContext = null) {
   });
 }
 
+function toGeneralizedTime(date) {
+  return `${date.toISOString().replace(/[-:T]/g, '').slice(0, 14)}.0Z`;
+}
+
+// Inactive accounts: enabled users or computers whose replicated
+// lastLogonTimestamp is older than `days` (or missing). Objects created
+// within that period are skipped, as they could not have been inactive
+// for that long yet. Paged, so it is not capped like the quick search.
+async function staleAccounts(kind = 'user', days = 730, options = {}, authContext = null) {
+  const typeFilter = kind === 'computer' ? SEARCH_TYPE_FILTERS.computer : SEARCH_TYPE_FILTERS.user;
+  const threshold = new Date(Date.now() - days * 86400000);
+  const parts = [
+    typeFilter,
+    `(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<=${daysAgoFileTime(days)}))`,
+    `(whenCreated<=${toGeneralizedTime(threshold)})`
+  ];
+  if (!options.includeDisabled) parts.push('(!(userAccountControl:1.2.840.113556.1.4.803:=2))');
+
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(options.ouDn || env.ad.baseDn, {
+      scope: 'sub',
+      filter: `(&${parts.join('')})`,
+      attributes: [...DEFAULT_ATTRS, 'operatingSystem', 'operatingSystemVersion', 'pwdLastSet', 'dNSHostName'],
+      paged: true,
+      sizeLimit: 0
+    });
+    return searchEntries.map(normalizeObject);
+  });
+}
+
 async function getObjectDetails(dn, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(dn, {
@@ -847,6 +877,7 @@ module.exports = {
   searchObjects,
   searchObjectsInOu,
   advancedSearch,
+  staleAccounts,
   getObjectDetails,
   updateUserGroups,
   updateGroupMembers,

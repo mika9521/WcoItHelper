@@ -558,22 +558,28 @@ router.post('/api/user/create', async (req, res) => {
 });
 
 router.get('/api/reports/stale-logons', async (req, res) => {
+  const kind = req.query.kind === 'computer' ? 'computer' : 'user';
+  const days = Math.max(1, Math.min(Number(req.query.days) || Number(req.query.years || 2) * 365, 36500));
+  const includeDisabled = req.query.includeDisabled === '1';
+  const ouDn = String(req.query.ouDn || '');
   try {
-    const years = Number(req.query.years || 2);
-    const report = await staleLogons(years, adAuthFromRequest(req));
+    const report = await staleLogons({ kind, days, includeDisabled, ouDn }, adAuthFromRequest(req));
     await audit(req, {
       action: 'report_stale_logons',
       status: 'success',
-      message: 'Wygenerowano raport nieaktywnych kont',
-      details: { years, records: report.length }
+      scopeType: kind,
+      scopeDn: ouDn,
+      message: kind === 'computer' ? 'Wygenerowano raport nieaktywnych komputerów' : 'Wygenerowano raport nieaktywnych kont',
+      details: { kind, days, includeDisabled, ouDn, records: report.length }
     });
     res.json(report);
   } catch (error) {
     await audit(req, {
       action: 'report_stale_logons',
       status: 'error',
+      scopeType: kind,
       message: error.message,
-      details: { years: Number(req.query?.years || 2) }
+      details: { kind, days, includeDisabled, ouDn }
     });
     res.status(error.status || 500).json({ message: error.message });
   }

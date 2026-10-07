@@ -7,8 +7,6 @@ const objectBody = document.getElementById('objectBody');
 const objectTitle = document.getElementById('objectTitle');
 const objectSubtitle = document.getElementById('objectSubtitle');
 const objectTitleIcon = document.getElementById('objectTitleIcon');
-const loadReportBtn = document.getElementById('loadReportBtn');
-const reportResult = document.getElementById('reportResult');
 const reportsList = document.getElementById('reportsList');
 const statUsers = document.getElementById('statUsers');
 const statActiveUsers = document.getElementById('statActiveUsers');
@@ -58,7 +56,8 @@ const state = {
   currentObjectDn: null,
   pendingChanges: null,
   ouTreeCache: new Map(),
-  activeReportPage: 'stale-logons',
+  activeReportPage: 'stale-users',
+  staleReports: {},
   searchResults: [],
   searchSort: { key: null, dir: 1 },
   hasSearched: false,
@@ -1814,24 +1813,93 @@ portalActivityNext?.addEventListener('click', () => {
   loadPortalActivityReport(state.portalActivityPage + 1);
 });
 
-loadReportBtn.addEventListener('click', async () => {
+// ===== Raporty nieaktywnych kont (użytkownicy / komputery) =====
+function staleRowHtml(obj, kind) {
+  const dn = obj.dn || obj.distinguishedName || '';
+  const last = obj.lastLogonDate ? new Date(obj.lastLogonDate) : null;
+  const lastHtml = last
+    ? `<span title="${escapeHtml(last.toLocaleString('pl-PL'))}">${escapeHtml(last.toLocaleDateString('pl-PL'))}</span><div class="text-muted">${escapeHtml(formatRelative(last))}</div>`
+    : '<span class="logon-never">nigdy</span>';
+  const created = formatAdDate(obj.whenCreated).split(',')[0];
+  const disabled = isAccountDisabled(obj);
+  const extra = kind === 'computer'
+    ? `<td>${escapeHtml(obj.operatingSystem || '-')}${obj.operatingSystemVersion ? `<div class="text-muted">${escapeHtml(obj.operatingSystemVersion)}</div>` : ''}</td>
+       <td class="text-nowrap">${obj.pwdLastSetDate ? escapeHtml(new Date(obj.pwdLastSetDate).toLocaleDateString('pl-PL')) : '-'}</td>`
+    : '';
+  return `
+    <tr class="${disabled ? 'row-disabled' : ''}">
+      <td><button type="button" class="object-cell object-link stale-open" data-dn="${escapeHtml(dn)}" data-kind="${kind}">
+        ${getTypeBadgeHtml(kind)}
+        <span class="object-cell-text"><span class="object-cell-name">${escapeHtml(getDisplayName(obj))}</span>
+        <span class="object-cell-sub font-monospace">${escapeHtml(obj.sAMAccountName || '')}${disabled ? ' · <span class="text-warning-emphasis">wyłączone</span>' : ''}</span></span>
+      </button></td>
+      <td class="text-nowrap">${lastHtml}</td>
+      ${extra}
+      <td class="text-nowrap">${escapeHtml(created)}</td>
+      <td><span class="path-inline" title="${escapeHtml(dn)}">${dnToPathHtml(parentDn(dn), { skipDomain: true })}</span></td>
+    </tr>`;
+}
+
+async function runStaleReport(section) {
+  const kind = section.dataset.kind;
+  const amount = Math.max(1, Number(section.querySelector('.stale-amount').value) || 1);
+  const unit = Number(section.querySelector('.stale-unit').value) || 1;
+  const days = amount * unit;
+  const ouDn = section.querySelector('.stale-ou').value;
+  const includeDisabled = section.querySelector('.stale-include-disabled').checked;
+  const holder = section.querySelector('.stale-result');
+  const exportBtn = section.querySelector('.stale-export');
+  exportBtn.disabled = true;
+  holder.innerHTML = '<div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Generowanie raportu…</div>';
   try {
-    const years = Number(document.getElementById('reportYears').value || 2);
-    reportResult.innerHTML = '<div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Generowanie raportu…</div>';
-    const data = await api(`/api/reports/stale-logons?years=${years}`);
-    const rows = data.map((u) => `
-      <tr class="${isAccountDisabled(u) ? 'row-disabled' : ''}">
-        <td><span class="fw-semibold">${escapeHtml(getDisplayName(u))}</span><div class="small text-muted font-monospace">${escapeHtml(u.sAMAccountName || '')}</div></td>
-        <td class="text-nowrap">${u.lastLogonDate ? escapeHtml(new Date(u.lastLogonDate).toLocaleDateString('pl-PL')) : '<span class="text-muted">nigdy</span>'}</td>
-        <td><span class="path-inline" title="${escapeHtml(u.dn || '')}">${dnToPathHtml(parentDn(u.dn), { skipDomain: true })}</span></td>
-      </tr>`).join('');
-    reportResult.innerHTML = `
-      <div class="mb-2">Znaleziono <strong>${data.length}</strong> kont bez logowania od ${years} lat.</div>
-      ${data.length ? `<div class="table-responsive report-table-wrap"><table class="table table-sm table-hover align-middle mb-0"><thead><tr><th>Użytkownik</th><th>Ostatnie logowanie</th><th>Lokalizacja</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}`;
-    showToast('Raport wygenerowany');
+    const params = new URLSearchParams({ kind, days: String(days), ouDn, includeDisabled: includeDisabled ? '1' : '0' });
+    const data = await api(`/api/reports/stale-logons?${params.toString()}`);
+    state.staleReports[kind] = data;
+    const never = data.filter((o) => !o.lastLogonDate).length;
+    const head = kind === 'computer'
+      ? '<th>Komputer</th><th>Ostatnie logowanie</th><th>System</th><th>Hasło konta</th><th>Utworzono</th><th>Lokalizacja</th>'
+      : '<th>Użytkownik</th><th>Ostatnie logowanie</th><th>Utworzono</th><th>Lokalizacja</th>';
+    holder.innerHTML = `
+      <div class="mb-2">Znaleziono <strong>${data.length}</strong> ${kind === 'computer' ? 'komputerów' : 'kont'} bez logowania od ${days} dni${never ? ` (w tym ${never} nigdy niezalogowanych)` : ''}${includeDisabled ? '' : ', bez kont wyłączonych'}.</div>
+      ${data.length ? `<div class="table-responsive report-table-wrap"><table class="table table-sm table-hover align-middle mb-0"><thead><tr>${head}</tr></thead><tbody>${data.map((o) => staleRowHtml(o, kind)).join('')}</tbody></table></div>` : ''}`;
+    holder.querySelectorAll('.stale-open').forEach((btn) => btn.addEventListener('click', () => openObject(btn.dataset.dn, btn.dataset.kind)));
+    exportBtn.disabled = !data.length;
   } catch (error) {
+    holder.innerHTML = `<div class="text-danger">${escapeHtml(error.message)}</div>`;
     showToast(error.message, true);
   }
+}
+
+function exportStaleCsv(kind) {
+  const rows = state.staleReports[kind] || [];
+  const fmt = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+  const header = kind === 'computer'
+    ? ['Nazwa', 'sAMAccountName', 'Ostatnie logowanie', 'System', 'Wersja', 'Hasło konta zmienione', 'Utworzono', 'Wyłączone', 'DN']
+    : ['Nazwa', 'Login', 'Ostatnie logowanie', 'Utworzono', 'Wyłączone', 'DN'];
+  const lines = rows.map((o) => {
+    const created = (() => { const s = String(o.whenCreated || ''); return /^\d{8}/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : s; })();
+    const base = [getDisplayName(o), o.sAMAccountName || '', fmt(o.lastLogonDate)];
+    const tail = [created, isAccountDisabled(o) ? 'tak' : 'nie', o.dn || o.distinguishedName || ''];
+    return kind === 'computer'
+      ? [...base, o.operatingSystem || '', o.operatingSystemVersion || '', fmt(o.pwdLastSetDate), ...tail]
+      : [...base, ...tail];
+  });
+  const csv = [header, ...lines].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `nieaktywne-${kind === 'computer' ? 'komputery' : 'konta'}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+document.querySelectorAll('.stale-report').forEach((section) => {
+  section.querySelector('.stale-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runStaleReport(section);
+  });
+  section.querySelector('.stale-export').addEventListener('click', () => exportStaleCsv(section.dataset.kind));
+  section.querySelector('.stale-clear-ou').addEventListener('click', () => setOuFieldValue(section.querySelector('.stale-ou').id, ''));
 });
 
 async function loadDashboardStats() {

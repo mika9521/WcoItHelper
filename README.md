@@ -15,7 +15,7 @@ Modularny portal do zarządzania AD pod środowisko szpitalne:
 - blokowanie konta (soft delete): wyłączenie, usunięcie ze wszystkich grup (lista grup zapisywana w logach) i przeniesienie do OU zablokowane_konta,
 - podgląd i usuwanie certyfikatów (userCertificate) przypisanych do konta,
 - odblokowywanie kont przeniesionych do OU zablokowane_konta (z wyborem docelowego OU),
-- zakładka raportów (np. logowania starsze niż X lat),
+- raporty nieaktywnych użytkowników i komputerów (bez kont wyłączonych, zakres OU, eksport CSV), aktywność portalu, historia logowań,
 - szczegółowe logi zmian (kto, co i jakie wartości zmienił),
 - toasty i modale w UI,
 - **działanie offline UI** z pełnym Bootstrapem dostarczonym lokalnie z `node_modules/bootstrap/dist` (bez CDN).

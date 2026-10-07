@@ -870,3 +870,5 @@ pre.json-view {
 .logon-old .logon-rel { color: var(--warning); }
 .logon-stale .logon-rel { color: var(--danger); }
 .logon-never { font-size: 0.8rem; color: var(--ink-400); font-style: italic; }
+.stale-period { width: 220px; }
+.stale-period .form-select { max-width: 120px; }

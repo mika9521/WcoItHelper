@@ -40,7 +40,10 @@ function normalizeObject(entry) {
     profilePath: pickFirst(entry.profilePath),
     scriptPath: pickFirst(entry.scriptPath),
     accountExpires: pickFirst(entry.accountExpires),
-    pwdLastSet: pickFirst(entry.pwdLastSet)
+    pwdLastSet: pickFirst(entry.pwdLastSet),
+    operatingSystem: pickFirst(entry.operatingSystem),
+    operatingSystemVersion: pickFirst(entry.operatingSystemVersion),
+    dNSHostName: pickFirst(entry.dNSHostName)
   };
 }
 
