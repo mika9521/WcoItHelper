@@ -4,6 +4,7 @@ const { Change, Attribute } = require('ldapts');
 const { AppError } = require('../../utils/errors');
 const { withUserBind, withAdaptiveBind } = require('./adClient');
 const { normalizeObject } = require('./adMapper');
+const { SdFlagsControl, getCannotChangePassword, setCannotChangePassword } = require('./securityDescriptor');
 
 const DEFAULT_ATTRS = [
   'cn', 'displayName', 'sAMAccountName', 'userPrincipalName', 'mail', 'department', 'title',
@@ -195,6 +196,36 @@ async function advancedSearch(options = {}, authContext = null) {
   });
 }
 
+function toGeneralizedTime(date) {
+  return `${date.toISOString().replace(/[-:T]/g, '').slice(0, 14)}.0Z`;
+}
+
+// Inactive accounts: enabled users or computers whose replicated
+// lastLogonTimestamp is older than `days` (or missing). Objects created
+// within that period are skipped, as they could not have been inactive
+// for that long yet. Paged, so it is not capped like the quick search.
+async function staleAccounts(kind = 'user', days = 730, options = {}, authContext = null) {
+  const typeFilter = kind === 'computer' ? SEARCH_TYPE_FILTERS.computer : SEARCH_TYPE_FILTERS.user;
+  const threshold = new Date(Date.now() - days * 86400000);
+  const parts = [
+    typeFilter,
+    `(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<=${daysAgoFileTime(days)}))`,
+    `(whenCreated<=${toGeneralizedTime(threshold)})`
+  ];
+  if (!options.includeDisabled) parts.push('(!(userAccountControl:1.2.840.113556.1.4.803:=2))');
+
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(options.ouDn || env.ad.baseDn, {
+      scope: 'sub',
+      filter: `(&${parts.join('')})`,
+      attributes: [...DEFAULT_ATTRS, 'operatingSystem', 'operatingSystemVersion', 'pwdLastSet', 'dNSHostName'],
+      paged: true,
+      sizeLimit: 0
+    });
+    return searchEntries.map(normalizeObject);
+  });
+}
+
 async function getObjectDetails(dn, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(dn, {
@@ -202,7 +233,16 @@ async function getObjectDetails(dn, authContext = null) {
       attributes: ['*', 'member', 'managedBy', 'pwdLastSet', 'userAccountControl']
     });
     if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
-    return searchEntries[0];
+    const entry = searchEntries[0];
+    const classes = [].concat(entry.objectClass || []).map((c) => String(c).toLowerCase());
+    if (classes.includes('user') && !classes.includes('computer')) {
+      try {
+        entry.portalUserCannotChangePassword = getCannotChangePassword(await readSecurityDescriptor(client, dn));
+      } catch {
+        // No right to read the DACL: the settings tab falls back to UAC.
+      }
+    }
+    return entry;
   });
 }
 
@@ -242,6 +282,59 @@ async function moveObject(objectDn, newParentOuDn, authContext = null) {
   });
 }
 
+// Passwords (unicodePwd) can only be written over an encrypted connection;
+// over plain LDAP AD answers "0000001F: SvcErr ... problem 5003
+// (WILL_NOT_PERFORM)".
+function isConnectionEncrypted() {
+  const url = String(env.ad.url || '').toLowerCase();
+  return url.startsWith('ldaps://') || (url.startsWith('ldap://') && env.ad.tlsEnabled);
+}
+
+// Translates the most common AD error codes into an actionable message.
+function explainAdError(error, context = '') {
+  const msg = String(error?.message || error || '');
+  const prefix = context ? `${context}: ` : '';
+  if (/0000001F/i.test(msg) && /5003/.test(msg)) {
+    return new AppError(`${prefix}AD odmówił operacji (WILL_NOT_PERFORM). Hasło można ustawić tylko przez połączenie szyfrowane: użyj LDAPS (AD_PROTOCOL=ldaps, port 636) albo StartTLS (AD_TLS_ENABLED=true). Szczegóły: ${msg}`, 400);
+  }
+  if (/0000052D/i.test(msg)) {
+    return new AppError(`${prefix}Hasło nie spełnia zasad domeny (długość, złożoność lub historia haseł). Szczegóły: ${msg}`, 400);
+  }
+  if (/00000005|INSUFF_ACCESS_RIGHTS/i.test(msg)) {
+    return new AppError(`${prefix}Brak uprawnień konta używanego przez portal do tej operacji. Szczegóły: ${msg}`, 403);
+  }
+  if (/00002071|ENTRY_EXISTS|already exists/i.test(msg)) {
+    return new AppError(`${prefix}Obiekt o tej nazwie już istnieje w wybranym OU. Szczegóły: ${msg}`, 409);
+  }
+  if (/0000208F|NAME_ERROR|00000524/i.test(msg)) {
+    return new AppError(`${prefix}Login lub nazwa jest już używana w domenie. Szczegóły: ${msg}`, 409);
+  }
+  return error instanceof AppError ? error : new AppError(`${prefix}${msg}`, error?.status || 500);
+}
+
+async function readSecurityDescriptor(client, dn) {
+  const { searchEntries } = await client.search(dn, {
+    scope: 'base',
+    attributes: ['nTSecurityDescriptor'],
+    explicitBufferAttributes: ['nTSecurityDescriptor']
+  }, new SdFlagsControl(4));
+  const raw = searchEntries[0]?.nTSecurityDescriptor;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value) throw new AppError('Nie udało się odczytać uprawnień (nTSecurityDescriptor) obiektu', 500);
+  return Buffer.isBuffer(value) ? value : Buffer.from(value);
+}
+
+async function applyCannotChangePassword(client, dn, enabled) {
+  const current = await readSecurityDescriptor(client, dn);
+  if (getCannotChangePassword(current) === Boolean(enabled)) return;
+  const updated = setCannotChangePassword(current, Boolean(enabled));
+  await client.modify(dn, toChange('replace', 'nTSecurityDescriptor', updated), new SdFlagsControl(4));
+}
+
+async function readCannotChangePassword(dn, authContext = null) {
+  return withAdaptiveBind(authContext, async (client) => getCannotChangePassword(await readSecurityDescriptor(client, dn)));
+}
+
 async function createUser(payload, authContext = null) {
   const {
     ouDn,
@@ -249,13 +342,13 @@ async function createUser(payload, authContext = null) {
     lastName,
     password,
     description,
-    mustChangePasswordAtNextLogon,
-    userCannotChangePassword,
-    passwordNeverExpires,
-    accountDisabled,
     accountExpiresMode,
     accountExpiresDate
   } = payload;
+  const mustChangePasswordAtNextLogon = payload.mustChangePasswordAtNextLogon === true;
+  const userCannotChangePassword = payload.userCannotChangePassword === true;
+  const passwordNeverExpires = payload.passwordNeverExpires === true;
+  const accountDisabled = payload.accountDisabled === true;
   const login = String(payload.login || '').trim();
   const groups = Array.isArray(payload.groups) ? payload.groups.filter(Boolean) : [];
 
@@ -263,6 +356,24 @@ async function createUser(payload, authContext = null) {
   if (!ouDn) throw new AppError('Nie wybrano docelowego OU', 400);
   if (!firstName || !lastName) throw new AppError('Imię i nazwisko są wymagane', 400);
   if (!password) throw new AppError('Hasło jest wymagane', 400);
+  if (!isConnectionEncrypted()) {
+    throw new AppError('Portal łączy się z AD bez szyfrowania, a AD pozwala ustawić hasło tylko przez LDAPS lub StartTLS. Ustaw AD_PROTOCOL=ldaps (port 636) albo AD_TLS_ENABLED=true i uruchom portal ponownie. Konto nie zostało utworzone.', 400);
+  }
+
+  let accountExpires = ACCOUNT_NEVER_EXPIRES;
+  if (accountExpiresMode === 'date' && accountExpiresDate) {
+    accountExpires = toWindowsFileTime(accountExpiresDate, true);
+    if (!accountExpires) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
+  }
+
+  const UAC = {
+    NORMAL_ACCOUNT: 0x0200,
+    ACCOUNTDISABLE: 0x0002,
+    DONT_EXPIRE_PASSWORD: 0x10000
+  };
+  let userAccountControl = UAC.NORMAL_ACCOUNT;
+  if (accountDisabled) userAccountControl |= UAC.ACCOUNTDISABLE;
+  if (passwordNeverExpires) userAccountControl |= UAC.DONT_EXPIRE_PASSWORD;
 
   const displayName = `${firstName} ${lastName}`;
   // The AD object name (cn / RDN, the "Name" column in ADUC) is the login,
@@ -271,42 +382,45 @@ async function createUser(payload, authContext = null) {
   // collision when a namesake already exists in the same OU.
   const dn = `CN=${escapeDnValue(login)},${ouDn}`;
 
+  const attr = (type, values) => new Attribute({ type, values: Array.isArray(values) ? values : [values] });
+  // Password, account flags and expiry go into the add itself, so the
+  // account is either created complete or not at all (no half-created,
+  // disabled object left behind when one of the later steps fails).
+  const attributes = [
+    attr('objectClass', ['top', 'person', 'organizationalPerson', 'user']),
+    attr('cn', login),
+    attr('givenName', firstName),
+    attr('sn', lastName),
+    attr('displayName', displayName),
+    attr('sAMAccountName', login),
+    attr('userPrincipalName', `${login}@${getDomainFromBaseDn()}`),
+    attr('unicodePwd', encodePassword(password)),
+    attr('userAccountControl', String(userAccountControl)),
+    attr('accountExpires', accountExpires)
+  ];
+  if (description) attributes.push(attr('description', description));
+
   return withAdaptiveBind(authContext, async (client) => {
-    await client.add(dn, {
-      objectClass: ['top', 'person', 'organizationalPerson', 'user'],
-      cn: login,
-      givenName: firstName,
-      sn: lastName,
-      displayName,
-      sAMAccountName: login,
-      userPrincipalName: `${login}@${getDomainFromBaseDn()}`,
-      ...(description ? { description } : {})
-    });
-
-    await client.modify(dn, toChange('replace', 'unicodePwd', encodePassword(password)));
-    const UAC = {
-      NORMAL_ACCOUNT: 0x0200,
-      ACCOUNTDISABLE: 0x0002,
-      PASSWD_CANT_CHANGE: 0x0040,
-      DONT_EXPIRE_PASSWORD: 0x10000
-    };
-    let userAccountControl = UAC.NORMAL_ACCOUNT;
-    if (Boolean(accountDisabled)) userAccountControl |= UAC.ACCOUNTDISABLE;
-    if (Boolean(userCannotChangePassword)) userAccountControl |= UAC.PASSWD_CANT_CHANGE;
-    if (Boolean(passwordNeverExpires)) userAccountControl |= UAC.DONT_EXPIRE_PASSWORD;
-
-    await client.modify(dn, toChange('replace', 'userAccountControl', String(userAccountControl)));
-
-    if (Boolean(mustChangePasswordAtNextLogon)) {
-      await client.modify(dn, toChange('replace', 'pwdLastSet', '0'));
+    try {
+      await client.add(dn, attributes);
+    } catch (error) {
+      throw explainAdError(error, 'Nie utworzono konta');
     }
 
-    if (accountExpiresMode === 'date' && accountExpiresDate) {
-      const fileTime = toWindowsFileTime(accountExpiresDate, true);
-      if (!fileTime) throw new AppError('Nieprawidłowa data wygaśnięcia konta', 400);
-      await client.modify(dn, toChange('replace', 'accountExpires', fileTime));
-    } else {
-      await client.modify(dn, toChange('replace', 'accountExpires', ACCOUNT_NEVER_EXPIRES));
+    // Remaining account settings; if any of them fails the account is
+    // removed again so the operation can simply be retried.
+    try {
+      // 0 = must change at next logon; -1 = "password set now".
+      await client.modify(dn, toChange('replace', 'pwdLastSet', mustChangePasswordAtNextLogon ? '0' : '-1'));
+      if (userCannotChangePassword) await applyCannotChangePassword(client, dn, true);
+    } catch (error) {
+      let rollback = 'konto zostało usunięte, można spróbować ponownie';
+      try {
+        await client.del(dn);
+      } catch (delError) {
+        rollback = `nie udało się usunąć częściowo utworzonego konta (${delError.message}), usuń je ręcznie`;
+      }
+      throw explainAdError(error, `Błąd ustawiania opcji konta (${rollback})`);
     }
 
     const addedGroups = [];
@@ -317,11 +431,17 @@ async function createUser(payload, authContext = null) {
         await client.modify(groupDn, toChange('add', 'member', dn));
         addedGroups.push(groupDn);
       } catch (error) {
-        failedGroups.push({ groupDn, message: error.message });
+        failedGroups.push({ groupDn, message: explainAdError(error).message });
       }
     }
 
-    return { dn, login, addedGroups, failedGroups };
+    return {
+      dn,
+      login,
+      addedGroups,
+      failedGroups,
+      settings: { mustChangePasswordAtNextLogon, userCannotChangePassword, passwordNeverExpires, accountDisabled }
+    };
   });
 }
 
@@ -509,6 +629,8 @@ async function updateUserSettings(objectDn, payload = {}, authContext = null) {
       DONT_EXPIRE_PASSWORD: 0x10000,
       SMARTCARD_REQUIRED: 0x40000
     };
+    // PASSWD_CANT_CHANGE in userAccountControl is ignored by AD; the real
+    // setting lives in the DACL (applied below), so keep the bit cleared.
 
     let nextUac = currentUac;
     const setFlag = (enabled, bit) => {
@@ -516,7 +638,7 @@ async function updateUserSettings(objectDn, payload = {}, authContext = null) {
       nextUac = enabled ? (nextUac | bit) : (nextUac & ~bit);
     };
     setFlag(Boolean(accountDisabled), UAC.ACCOUNTDISABLE);
-    setFlag(Boolean(userCannotChangePassword), UAC.PASSWD_CANT_CHANGE);
+    nextUac &= ~UAC.PASSWD_CANT_CHANGE;
     setFlag(Boolean(passwordNeverExpires), UAC.DONT_EXPIRE_PASSWORD);
     setFlag(Boolean(smartcardRequired), UAC.SMARTCARD_REQUIRED);
 
@@ -544,7 +666,20 @@ async function updateUserSettings(objectDn, payload = {}, authContext = null) {
     }
 
     for (const mod of modifications) {
-      await client.modify(objectDn, mod);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await client.modify(objectDn, mod);
+      } catch (error) {
+        throw explainAdError(error, `Nie zapisano pola ${mod.modification.type}`);
+      }
+    }
+
+    if (typeof userCannotChangePassword === 'boolean') {
+      try {
+        await applyCannotChangePassword(client, objectDn, userCannotChangePassword);
+      } catch (error) {
+        throw explainAdError(error, 'Nie zapisano opcji „Użytkownik nie może zmienić hasła”');
+      }
     }
 
     return { updated: true };
@@ -742,12 +877,14 @@ module.exports = {
   searchObjects,
   searchObjectsInOu,
   advancedSearch,
+  staleAccounts,
   getObjectDetails,
   updateUserGroups,
   updateGroupMembers,
   copyGroupsFromReference,
   moveObject,
   createUser,
+  readCannotChangePassword,
   createGroup,
   setAccountEnabled,
   softDeleteAccount,

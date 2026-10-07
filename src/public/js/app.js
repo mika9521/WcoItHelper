@@ -7,8 +7,6 @@ const objectBody = document.getElementById('objectBody');
 const objectTitle = document.getElementById('objectTitle');
 const objectSubtitle = document.getElementById('objectSubtitle');
 const objectTitleIcon = document.getElementById('objectTitleIcon');
-const loadReportBtn = document.getElementById('loadReportBtn');
-const reportResult = document.getElementById('reportResult');
 const reportsList = document.getElementById('reportsList');
 const statUsers = document.getElementById('statUsers');
 const statActiveUsers = document.getElementById('statActiveUsers');
@@ -49,7 +47,9 @@ const state = {
   selectedOuDn: null,
   groupPickHandler: null,
   userPickHandler: null,
-  newUser: { referenceDn: null, groups: new Set(), loginTouched: false },
+  newUser: { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), shares: new Map(), copyFromRef: false, copied: null, loginTouched: false },
+  permissionCatalog: [],
+  shareCatalog: [],
   softDeleteTargetDn: null,
   unlockTargetDn: null,
   certificates: [],
@@ -58,7 +58,8 @@ const state = {
   currentObjectDn: null,
   pendingChanges: null,
   ouTreeCache: new Map(),
-  activeReportPage: 'stale-logons',
+  activeReportPage: 'stale-users',
+  staleReports: {},
   searchResults: [],
   searchSort: { key: null, dir: 1 },
   hasSearched: false,
@@ -558,7 +559,9 @@ function userSettingsTemplate(data) {
   const passwordNeverExpires = isUacFlagSet(data, 0x10000);
   const accountDisabled = isUacFlagSet(data, 0x0002);
   const smartcardRequired = isUacFlagSet(data, 0x40000);
-  const userCannotChangePassword = isUacFlagSet(data, 0x0040);
+  const userCannotChangePassword = typeof data.portalUserCannotChangePassword === 'boolean'
+    ? data.portalUserCannotChangePassword
+    : isUacFlagSet(data, 0x0040);
   const accountExpiresDate = formatAccountExpiresDate(data.accountExpires);
   const expiresNever = !accountExpiresDate;
 
@@ -745,6 +748,21 @@ function formatAuditDetails(event) {
     }
   } else if (action === 'user_certificate_delete') {
     rows.push(`<div class="mt-1"><span class="fw-semibold">Certyfikat:</span> ${escapeHtml(details.subject || details.subjectCn || '-')}${details.thumbprint ? ` · odcisk <code class="small">${escapeHtml(details.thumbprint)}</code>` : ''}${details.serialNumber ? ` · nr <code class="small">${escapeHtml(details.serialNumber)}</code>` : ''}</div>`);
+  } else if (action === 'permission_create' || action === 'permission_delete') {
+    const p = details.item || details.permission || {};
+    rows.push(`<div class="mt-1"><span class="fw-semibold">${escapeHtml(p.name || '-')}</span>${formatDnList((p.groups || []).map((g) => g.dn))}</div>`);
+  } else if (action === 'share_create' || action === 'share_delete' || action === 'share_update') {
+    const sh = details.item || details.after || {};
+    rows.push(`<div class="mt-1"><span class="fw-semibold">${escapeHtml(sh.name || '-')}</span> <code class="small">${escapeHtml(sh.path || '')}</code></div>`);
+    rows.push(`<div class="mt-1 small">-r: ${escapeHtml(dnLabel(sh.readGroup?.dn))} · -rw: ${escapeHtml(dnLabel(sh.writeGroup?.dn))}</div>`);
+  } else if (action === 'permission_update') {
+    const before = (details.before?.groups || []).map((g) => g.dn);
+    const after = (details.after?.groups || []).map((g) => g.dn);
+    const added = after.filter((g) => !before.includes(g));
+    const removed = before.filter((g) => !after.includes(g));
+    if (details.before?.name !== details.after?.name) rows.push(`<div class="mt-1">Nazwa: ${escapeHtml(details.before?.name || '')} → <strong>${escapeHtml(details.after?.name || '')}</strong></div>`);
+    if (added.length) rows.push(`<div class="mt-1"><span class="text-success fw-semibold">+ Grupy:</span>${formatDnList(added)}</div>`);
+    if (removed.length) rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">− Grupy:</span>${formatDnList(removed)}</div>`);
   } else if (action === 'object_move') {
     if (event.targetDn) rows.push(`<div class="mt-1">Przeniesiono do: <code class="small">${escapeHtml(event.targetDn)}</code></div>`);
   } else if (action === 'user_settings_update') {
@@ -757,6 +775,10 @@ function formatAuditDetails(event) {
     }
   } else if (action === 'user_create') {
     if (details.login) rows.push(`<div class="mt-1"><span class="fw-semibold">Login:</span> ${escapeHtml(details.login)}</div>`);
+    if ((details.permissions || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Uprawnienia:</span> ${details.permissions.map((p) => escapeHtml(p.name)).join(', ')}</div>`);
+    if ((details.shares || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Udziały:</span> ${details.shares.map((x) => `${escapeHtml(x.name)} (${x.level === 'rw' ? 'odczyt i zapis' : 'odczyt'})`).join(', ')}</div>`);
+    if ((details.addedGroups || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Dodano do grup:</span>${formatDnList(details.addedGroups)}</div>`);
+    if ((details.failedGroups || []).length) rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">Nie dodano do:</span>${formatDnList(details.failedGroups.map((f) => f.groupDn))}</div>`);
   } else if (action === 'search') {
     rows.push(`<div class="mt-1">Zapytanie: <code>${escapeHtml(details.query || '')}</code> · typ: ${escapeHtml(details.type || '-')} · wyników: ${details.results ?? '-'}</div>`);
   } else if (details && Object.keys(details).length) {
@@ -1812,24 +1834,93 @@ portalActivityNext?.addEventListener('click', () => {
   loadPortalActivityReport(state.portalActivityPage + 1);
 });
 
-loadReportBtn.addEventListener('click', async () => {
+// ===== Raporty nieaktywnych kont (użytkownicy / komputery) =====
+function staleRowHtml(obj, kind) {
+  const dn = obj.dn || obj.distinguishedName || '';
+  const last = obj.lastLogonDate ? new Date(obj.lastLogonDate) : null;
+  const lastHtml = last
+    ? `<span title="${escapeHtml(last.toLocaleString('pl-PL'))}">${escapeHtml(last.toLocaleDateString('pl-PL'))}</span><div class="text-muted">${escapeHtml(formatRelative(last))}</div>`
+    : '<span class="logon-never">nigdy</span>';
+  const created = formatAdDate(obj.whenCreated).split(',')[0];
+  const disabled = isAccountDisabled(obj);
+  const extra = kind === 'computer'
+    ? `<td>${escapeHtml(obj.operatingSystem || '-')}${obj.operatingSystemVersion ? `<div class="text-muted">${escapeHtml(obj.operatingSystemVersion)}</div>` : ''}</td>
+       <td class="text-nowrap">${obj.pwdLastSetDate ? escapeHtml(new Date(obj.pwdLastSetDate).toLocaleDateString('pl-PL')) : '-'}</td>`
+    : '';
+  return `
+    <tr class="${disabled ? 'row-disabled' : ''}">
+      <td><button type="button" class="object-cell object-link stale-open" data-dn="${escapeHtml(dn)}" data-kind="${kind}">
+        ${getTypeBadgeHtml(kind)}
+        <span class="object-cell-text"><span class="object-cell-name">${escapeHtml(getDisplayName(obj))}</span>
+        <span class="object-cell-sub font-monospace">${escapeHtml(obj.sAMAccountName || '')}${disabled ? ' · <span class="text-warning-emphasis">wyłączone</span>' : ''}</span></span>
+      </button></td>
+      <td class="text-nowrap">${lastHtml}</td>
+      ${extra}
+      <td class="text-nowrap">${escapeHtml(created)}</td>
+      <td><span class="path-inline" title="${escapeHtml(dn)}">${dnToPathHtml(parentDn(dn), { skipDomain: true })}</span></td>
+    </tr>`;
+}
+
+async function runStaleReport(section) {
+  const kind = section.dataset.kind;
+  const amount = Math.max(1, Number(section.querySelector('.stale-amount').value) || 1);
+  const unit = Number(section.querySelector('.stale-unit').value) || 1;
+  const days = amount * unit;
+  const ouDn = section.querySelector('.stale-ou').value;
+  const includeDisabled = section.querySelector('.stale-include-disabled').checked;
+  const holder = section.querySelector('.stale-result');
+  const exportBtn = section.querySelector('.stale-export');
+  exportBtn.disabled = true;
+  holder.innerHTML = '<div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Generowanie raportu…</div>';
   try {
-    const years = Number(document.getElementById('reportYears').value || 2);
-    reportResult.innerHTML = '<div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Generowanie raportu…</div>';
-    const data = await api(`/api/reports/stale-logons?years=${years}`);
-    const rows = data.map((u) => `
-      <tr class="${isAccountDisabled(u) ? 'row-disabled' : ''}">
-        <td><span class="fw-semibold">${escapeHtml(getDisplayName(u))}</span><div class="small text-muted font-monospace">${escapeHtml(u.sAMAccountName || '')}</div></td>
-        <td class="text-nowrap">${u.lastLogonDate ? escapeHtml(new Date(u.lastLogonDate).toLocaleDateString('pl-PL')) : '<span class="text-muted">nigdy</span>'}</td>
-        <td><span class="path-inline" title="${escapeHtml(u.dn || '')}">${dnToPathHtml(parentDn(u.dn), { skipDomain: true })}</span></td>
-      </tr>`).join('');
-    reportResult.innerHTML = `
-      <div class="mb-2">Znaleziono <strong>${data.length}</strong> kont bez logowania od ${years} lat.</div>
-      ${data.length ? `<div class="table-responsive report-table-wrap"><table class="table table-sm table-hover align-middle mb-0"><thead><tr><th>Użytkownik</th><th>Ostatnie logowanie</th><th>Lokalizacja</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}`;
-    showToast('Raport wygenerowany');
+    const params = new URLSearchParams({ kind, days: String(days), ouDn, includeDisabled: includeDisabled ? '1' : '0' });
+    const data = await api(`/api/reports/stale-logons?${params.toString()}`);
+    state.staleReports[kind] = data;
+    const never = data.filter((o) => !o.lastLogonDate).length;
+    const head = kind === 'computer'
+      ? '<th>Komputer</th><th>Ostatnie logowanie</th><th>System</th><th>Hasło konta</th><th>Utworzono</th><th>Lokalizacja</th>'
+      : '<th>Użytkownik</th><th>Ostatnie logowanie</th><th>Utworzono</th><th>Lokalizacja</th>';
+    holder.innerHTML = `
+      <div class="mb-2">Znaleziono <strong>${data.length}</strong> ${kind === 'computer' ? 'komputerów' : 'kont'} bez logowania od ${days} dni${never ? ` (w tym ${never} nigdy niezalogowanych)` : ''}${includeDisabled ? '' : ', bez kont wyłączonych'}.</div>
+      ${data.length ? `<div class="table-responsive report-table-wrap"><table class="table table-sm table-hover align-middle mb-0"><thead><tr>${head}</tr></thead><tbody>${data.map((o) => staleRowHtml(o, kind)).join('')}</tbody></table></div>` : ''}`;
+    holder.querySelectorAll('.stale-open').forEach((btn) => btn.addEventListener('click', () => openObject(btn.dataset.dn, btn.dataset.kind)));
+    exportBtn.disabled = !data.length;
   } catch (error) {
+    holder.innerHTML = `<div class="text-danger">${escapeHtml(error.message)}</div>`;
     showToast(error.message, true);
   }
+}
+
+function exportStaleCsv(kind) {
+  const rows = state.staleReports[kind] || [];
+  const fmt = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
+  const header = kind === 'computer'
+    ? ['Nazwa', 'sAMAccountName', 'Ostatnie logowanie', 'System', 'Wersja', 'Hasło konta zmienione', 'Utworzono', 'Wyłączone', 'DN']
+    : ['Nazwa', 'Login', 'Ostatnie logowanie', 'Utworzono', 'Wyłączone', 'DN'];
+  const lines = rows.map((o) => {
+    const created = (() => { const s = String(o.whenCreated || ''); return /^\d{8}/.test(s) ? `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}` : s; })();
+    const base = [getDisplayName(o), o.sAMAccountName || '', fmt(o.lastLogonDate)];
+    const tail = [created, isAccountDisabled(o) ? 'tak' : 'nie', o.dn || o.distinguishedName || ''];
+    return kind === 'computer'
+      ? [...base, o.operatingSystem || '', o.operatingSystemVersion || '', fmt(o.pwdLastSetDate), ...tail]
+      : [...base, ...tail];
+  });
+  const csv = [header, ...lines].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `nieaktywne-${kind === 'computer' ? 'komputery' : 'konta'}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+document.querySelectorAll('.stale-report').forEach((section) => {
+  section.querySelector('.stale-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    runStaleReport(section);
+  });
+  section.querySelector('.stale-export').addEventListener('click', () => exportStaleCsv(section.dataset.kind));
+  section.querySelector('.stale-clear-ou').addEventListener('click', () => setOuFieldValue(section.querySelector('.stale-ou').id, ''));
 });
 
 async function loadDashboardStats() {
@@ -1907,13 +1998,21 @@ const LOGIN_HINT = 'Generowany automatycznie po wpisaniu imienia i nazwiska. Mo�
 let newUserLoginAvailable = false;
 let newUserLoginSeq = 0;
 
-function updateNewUserSubmitState() {
-  const ready = newUserLoginAvailable
+function isNewUserInfoValid() {
+  return Boolean(newUserLoginAvailable
     && newUserFirstName.value.trim()
     && newUserLastName.value.trim()
     && newUserPassword.value
-    && newUserOuDn.value;
-  newUserSubmitBtn.disabled = !ready;
+    && newUserOuDn.value);
+}
+
+function updateNewUserSubmitState() {
+  const step = state.newUser.step || 1;
+  const nextBtn = document.getElementById('newUserNextBtn');
+  if (step === 1) nextBtn.disabled = !newUserForm.querySelector('input[name="userType"]:checked');
+  if (step >= 2 && step < WIZARD_LAST_STEP) nextBtn.disabled = !isNewUserInfoValid();
+  newUserSubmitBtn.disabled = step !== WIZARD_LAST_STEP || !isNewUserInfoValid();
+  if (step === WIZARD_LAST_STEP) renderNewUserSummary();
 }
 
 function setNewUserLoginState(kind, message) {
@@ -2033,16 +2132,48 @@ document.getElementById('generateNewUserPasswordBtn').addEventListener('click', 
   updateNewUserSubmitState();
 });
 
+// Same rules as ADUC: "must change at next logon" cannot be combined with
+// "cannot change password" or "password never expires".
+const newUserPwdOptionsHint = document.getElementById('newUserPwdOptionsHint');
+function showPwdOptionsHint(text) {
+  newUserPwdOptionsHint.textContent = text || '';
+  newUserPwdOptionsHint.classList.toggle('d-none', !text);
+}
+document.getElementById('newUserMustChangePwd').addEventListener('change', (event) => {
+  if (!event.target.checked) return showPwdOptionsHint('');
+  const cannot = document.getElementById('newUserCannotChangePwd');
+  const never = document.getElementById('newUserPwdNeverExpires');
+  if (cannot.checked || never.checked) {
+    cannot.checked = false;
+    never.checked = false;
+    showPwdOptionsHint('Odznaczono „nie może zmienić hasła” i „hasło nigdy nie wygasa”: nie da się ich połączyć z wymuszeniem zmiany hasła.');
+  }
+  return undefined;
+});
+['newUserCannotChangePwd', 'newUserPwdNeverExpires'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', (event) => {
+    const must = document.getElementById('newUserMustChangePwd');
+    if (event.target.checked && must.checked) {
+      must.checked = false;
+      showPwdOptionsHint('Odznaczono „wymuś zmianę hasła”: nie da się jej połączyć z tą opcją.');
+    } else {
+      showPwdOptionsHint('');
+    }
+  });
+});
+
 function renderNewUserGroups() {
+  if (state.newUser.step === WIZARD_LAST_STEP) renderNewUserSummary();
+
   const groups = Array.from(state.newUser.groups);
   document.getElementById('newUserGroupsCount').textContent = String(groups.length);
   if (!groups.length) {
-    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak grup. Wybierz użytkownika wzorcowego lub dodaj grupy ręcznie.</div>';
+    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak innych grup. Grupy z uprawnień i udziałów są dodawane automatycznie.</div>';
     return;
   }
   newUserGroupsList.innerHTML = groups
     .sort((x, y) => dnLabel(x).localeCompare(dnLabel(y), 'pl', { sensitivity: 'base' }))
-    .map((dn) => `<span class="chip" title="${escapeHtml(dn)}">${icon('group')}<span>${escapeHtml(dnLabel(dn))}</span><button type="button" class="chip-remove" data-dn="${escapeHtml(dn)}" aria-label="Usuń grupę" title="Usuń">${icon('x')}</button></span>`)
+    .map((dn) => `<span class="chip ${isCopied('groups', dn) ? 'chip-from-ref' : ''}" title="${escapeHtml(dn)}">${icon('group')}<span>${escapeHtml(dnLabel(dn))}</span>${isCopied('groups', dn) ? fromRefBadge : ''}<button type="button" class="chip-remove" data-dn="${escapeHtml(dn)}" aria-label="Usuń grupę" title="Usuń">${icon('x')}</button></span>`)
     .join('');
 }
 
@@ -2078,18 +2209,124 @@ async function applyReferenceUser(item) {
   setOuFieldValue('newUserOuDn', parentDn(refDn));
   document.getElementById('newUserOuFromReference').classList.remove('d-none');
 
-  state.newUser.groups = new Set(toArray(data.memberOf));
-  renderNewUserGroups();
+  // Permissions are copied only when the admin switches on the
+  // "Kopiuj uprawnienia od wzorca" toggle.
+  undoReferenceCopy();
+  state.newUser.referenceGroups = toArray(data.memberOf).map(String);
+  document.getElementById('newUserCopyWrap').classList.remove('d-none');
+  if (state.newUser.copyFromRef) await applyReferenceCopy();
+  updateCopyToggle();
   updateNewUserSubmitState();
-  showToast(`Skopiowano OU i ${state.newUser.groups.size} grup(y) od: ${name}`);
+  showToast(`Skopiowano OU od: ${name}.`);
 }
 
+// ----- Kopiowanie uprawnień od użytkownika wzorcowego -----
+// Everything added by the copy is remembered, so switching it off (or
+// changing the reference user) removes exactly what it added.
+function undoReferenceCopy() {
+  const copied = state.newUser.copied;
+  if (!copied) return;
+  copied.perms.forEach((id) => state.newUser.permissions.delete(id));
+  copied.shares.forEach((id) => state.newUser.shares.delete(id));
+  copied.groups.forEach((dn) => state.newUser.groups.delete(dn));
+  state.newUser.copied = null;
+}
+
+async function applyReferenceCopy() {
+  undoReferenceCopy();
+  await loadWizardCatalogs();
+  const ref = new Set((state.newUser.referenceGroups || []).map((g) => g.toLowerCase()));
+  const copied = { perms: new Set(), shares: new Set(), groups: new Set() };
+  const covered = new Set();
+
+  state.permissionCatalog.forEach((p) => {
+    if (p.groups.length && p.groups.every((g) => ref.has(g.dn.toLowerCase())) && !state.newUser.permissions.has(p.id)) {
+      state.newUser.permissions.add(p.id);
+      copied.perms.add(p.id);
+    }
+  });
+  state.shareCatalog.forEach((sh) => {
+    const level = ref.has(sh.writeGroup.dn.toLowerCase()) ? 'rw' : ref.has(sh.readGroup.dn.toLowerCase()) ? 'r' : null;
+    if (level && !state.newUser.shares.has(sh.id)) {
+      state.newUser.shares.set(sh.id, level);
+      copied.shares.add(sh.id);
+    }
+  });
+  // Only groups delivered by the selected permissions/shares are covered;
+  // any other group of the reference user goes to "Inne grupy".
+  state.permissionCatalog
+    .filter((p) => state.newUser.permissions.has(p.id))
+    .forEach((p) => p.groups.forEach((g) => covered.add(g.dn.toLowerCase())));
+  state.shareCatalog
+    .filter((sh) => state.newUser.shares.has(sh.id))
+    .forEach((sh) => {
+      covered.add(sh.readGroup.dn.toLowerCase());
+      covered.add(sh.writeGroup.dn.toLowerCase());
+    });
+  const existing = new Set([...state.newUser.groups].map((g) => g.toLowerCase()));
+  state.newUser.referenceGroups.forEach((dn) => {
+    if (!covered.has(dn.toLowerCase()) && !existing.has(dn.toLowerCase())) {
+      state.newUser.groups.add(dn);
+      copied.groups.add(dn);
+    }
+  });
+  state.newUser.copied = copied;
+  renderNewUserGroups();
+}
+
+function referenceDisplayName() {
+  return document.getElementById('newUserReferenceName').textContent || 'wzorca';
+}
+
+const fromRefBadge = '<span class="from-ref-badge">skopiowano od wzorca</span>';
+
+function isCopied(kind, key) {
+  const c = state.newUser.copied;
+  return Boolean(state.newUser.copyFromRef && c && c[kind].has(key));
+}
+
+function updateCopyToggle() {
+  const btn = document.getElementById('newUserCopyPermsBtn');
+  const on = state.newUser.copyFromRef;
+  const c = state.newUser.copied;
+  btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.querySelector('.copy-toggle-icon').innerHTML = icon(on ? 'check' : 'copy');
+  btn.querySelector('.copy-toggle-label').textContent = on ? 'Uprawnienia wzorca skopiowane (kliknij, aby cofnąć)' : 'Kopiuj uprawnienia od wzorca';
+  document.getElementById('newUserCopyInfo').textContent = on && c
+    ? 'Skopiowane pozycje są oznaczone w kolejnych krokach.'
+    : 'Zaznaczy w kolejnych krokach te same uprawnienia, udziały i grupy co u wzorca.';
+}
+
+document.getElementById('newUserCopyPermsBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('newUserCopyPermsBtn');
+  state.newUser.copyFromRef = !state.newUser.copyFromRef;
+  btn.disabled = true;
+  try {
+    if (state.newUser.copyFromRef) {
+      await applyReferenceCopy();
+    } else {
+      undoReferenceCopy();
+      renderNewUserGroups();
+    }
+  } finally {
+    btn.disabled = false;
+    updateCopyToggle();
+  }
+});
+
 function clearReferenceUser() {
+  undoReferenceCopy();
+  state.newUser.copyFromRef = false;
   state.newUser.referenceDn = null;
+  state.newUser.referenceGroups = [];
   document.getElementById('newUserReferenceDn').value = '';
   document.getElementById('newUserReferenceEmpty').classList.remove('d-none');
   document.getElementById('newUserReferenceSelected').classList.add('d-none');
   document.getElementById('newUserOuFromReference').classList.add('d-none');
+  document.getElementById('newUserCopyWrap').classList.add('d-none');
+  updateCopyToggle();
+  renderNewUserGroups();
 }
 
 const pickReferenceUser = () => openUserPicker({
@@ -2099,30 +2336,36 @@ const pickReferenceUser = () => openUserPicker({
 
 document.getElementById('pickReferenceUserBtn').addEventListener('click', pickReferenceUser);
 document.getElementById('changeReferenceUserBtn').addEventListener('click', pickReferenceUser);
-document.getElementById('clearReferenceUserBtn').addEventListener('click', () => {
-  clearReferenceUser();
-  state.newUser.groups.clear();
-  renderNewUserGroups();
-});
+document.getElementById('clearReferenceUserBtn').addEventListener('click', clearReferenceUser);
 
 function resetNewUserForm() {
   newUserForm.reset();
   newUserForm.querySelector('input[name="accountExpiresDate"]').disabled = true;
   newUserPassword.type = 'password';
-  state.newUser = { referenceDn: null, groups: new Set(), loginTouched: false };
+  state.newUser = { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), shares: new Map(), copyFromRef: false, copied: null, loginTouched: false };
   clearReferenceUser();
   setOuFieldValue('newUserOuDn', '', { silent: true });
   renderNewUserGroups();
   setNewUserLoginState('idle', '');
+  showPwdOptionsHint('');
+  document.getElementById('newUserPermSearch').value = '';
+  document.getElementById('newUserShareSearch').value = '';
+  showNewUserStep(1);
+  loadWizardCatalogs();
 }
 
 // The picker modals open on top of the wizard without hiding it, so this
 // only fires when the wizard is opened fresh.
 newUserModalEl.addEventListener('show.bs.modal', resetNewUserForm);
-newUserModalEl.addEventListener('shown.bs.modal', () => newUserFirstName.focus());
+newUserModalEl.addEventListener('shown.bs.modal', () => newUserForm.querySelector('.user-type-input')?.focus());
 
 newUserForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  // Enter in an earlier step means "next", not "create".
+  if (state.newUser.step !== WIZARD_LAST_STEP) {
+    goNewUserNext();
+    return;
+  }
   if (newUserSubmitBtn.disabled) return;
   const spinner = document.getElementById('newUserSubmitSpinner');
   try {
@@ -2138,13 +2381,16 @@ newUserForm.addEventListener('submit', async (event) => {
     payload.accountDisabled = parseTruthy(payload.accountDisabled);
     payload.accountExpiresMode = payload.accountExpiresModeNewUser || 'never';
     payload.groups = Array.from(state.newUser.groups);
+    payload.permissionIds = Array.from(state.newUser.permissions);
+    payload.shareAccess = Array.from(state.newUser.shares, ([id, level]) => ({ id, level }));
+    Object.keys(payload).filter((k) => k.startsWith('share-')).forEach((k) => delete payload[k]);
     delete payload.accountExpiresModeNewUser;
     const result = await api('/api/user/create', { method: 'POST', body: JSON.stringify(payload) });
     const failed = result.failedGroups || [];
     if (failed.length) {
       showToast(`Utworzono ${result.login}, ale nie dodano do ${failed.length} grup(y): ${failed.map((f) => dnLabel(f.groupDn)).join(', ')}`, true);
     } else {
-      showToast(`Utworzono użytkownika ${result.login}${payload.groups.length ? ` i dodano do ${payload.groups.length} grup(y)` : ''}`);
+      showToast(`Utworzono użytkownika ${result.login}${(result.addedGroups || []).length ? ` i dodano do ${result.addedGroups.length} grup(y)` : ''}`);
     }
     bootstrap.Modal.getOrCreateInstance(newUserModalEl).hide();
     searchInput.value = result.login;
@@ -2163,6 +2409,621 @@ document.querySelectorAll('input[name="accountExpiresModeNewUser"]').forEach((ra
     if (!dateInput) return;
     dateInput.disabled = event.target.value !== 'date';
   });
+});
+
+// ----- Kroki kreatora -----
+const WIZARD_NEXT_LABELS = { 1: 'Informacje o użytkowniku', 2: 'Uprawnienia', 3: 'Udziały sieciowe', 4: 'Inne grupy', 5: 'Podsumowanie' };
+const WIZARD_LAST_STEP = 6;
+
+function showNewUserStep(step) {
+  state.newUser.step = step;
+  newUserForm.querySelectorAll('.wizard-pane').forEach((pane) => pane.classList.toggle('d-none', Number(pane.dataset.pane) !== step));
+  document.querySelectorAll('#newUserSteps .wizard-step').forEach((li) => {
+    const n = Number(li.dataset.step);
+    li.classList.toggle('active', n === step);
+    li.classList.toggle('done', n < step);
+  });
+  document.getElementById('newUserBackBtn').classList.toggle('d-none', step === 1);
+  document.getElementById('newUserNextBtn').classList.toggle('d-none', step === WIZARD_LAST_STEP);
+  newUserSubmitBtn.classList.toggle('d-none', step !== WIZARD_LAST_STEP);
+  if (WIZARD_NEXT_LABELS[step]) document.getElementById('newUserNextLabel').textContent = WIZARD_NEXT_LABELS[step];
+  newUserModalEl.querySelector('.modal-body').scrollTop = 0;
+  updateNewUserSubmitState();
+  if (step === 2) setTimeout(() => newUserFirstName.focus(), 50);
+  if (step === WIZARD_LAST_STEP) setTimeout(() => newUserSubmitBtn.focus(), 50);
+  if (step === 3) {
+    renderNewUserPermissions();
+    setTimeout(() => document.getElementById('newUserPermSearch').focus(), 50);
+  }
+  if (step === 4) {
+    renderNewUserShares();
+    setTimeout(() => document.getElementById('newUserShareSearch').focus(), 50);
+  }
+}
+
+function goNewUserNext() {
+  const step = state.newUser.step;
+  if (step === 1 && newUserForm.querySelector('input[name="userType"]:checked')) showNewUserStep(2);
+  else if (step >= 2 && step < WIZARD_LAST_STEP) {
+    if (isNewUserInfoValid()) showNewUserStep(step + 1);
+    else showToast('Uzupełnij imię, nazwisko, dostępny login, hasło i OU', true);
+  }
+}
+
+document.getElementById('newUserNextBtn').addEventListener('click', goNewUserNext);
+document.getElementById('newUserBackBtn').addEventListener('click', () => showNewUserStep(Math.max(1, state.newUser.step - 1)));
+newUserForm.querySelectorAll('input[name="userType"]').forEach((radio) => {
+  radio.addEventListener('change', updateNewUserSubmitState);
+  radio.closest('.user-type-card').addEventListener('dblclick', () => {
+    radio.checked = true;
+    goNewUserNext();
+  });
+});
+
+// ----- Uprawnienia w kreatorze -----
+async function loadShareCatalog() {
+  try {
+    state.shareCatalog = await api('/api/shares');
+  } catch (error) {
+    state.shareCatalog = [];
+    showToast(`Udziały: ${error.message}`, true);
+  }
+  return state.shareCatalog;
+}
+
+let wizardCatalogsPromise = null;
+function loadWizardCatalogs() {
+  if (!wizardCatalogsPromise) {
+    wizardCatalogsPromise = Promise.all([loadPermissionCatalog(), loadShareCatalog()])
+      .finally(() => { wizardCatalogsPromise = null; });
+  }
+  return wizardCatalogsPromise;
+}
+
+async function loadPermissionCatalog() {
+  try {
+    state.permissionCatalog = await api('/api/permissions');
+  } catch (error) {
+    state.permissionCatalog = [];
+    showToast(`Uprawnienia: ${error.message}`, true);
+  }
+  return state.permissionCatalog;
+}
+
+function permissionMatches(p, q) {
+  if (!q) return true;
+  const hay = [p.name, p.description, p.category, ...p.groups.map((g) => `${g.name} ${dnLabel(g.dn)}`)].join(' ').toLowerCase();
+  return q.split(/\s+/).every((word) => hay.includes(word));
+}
+
+function permissionGroupsLine(p) {
+  return p.groups.map((g) => `<span class="perm-group" title="${escapeHtml(g.dn)}">${icon('group')}${escapeHtml(g.name || dnLabel(g.dn))}</span>`).join('');
+}
+
+function renderNewUserPermissions() {
+  const list = document.getElementById('newUserPermList');
+  const q = document.getElementById('newUserPermSearch').value.trim().toLowerCase();
+  const catalog = state.permissionCatalog || [];
+  document.getElementById('newUserPermCount').textContent = String(state.newUser.permissions.size);
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('shield')}<div>Nie zdefiniowano jeszcze żadnych uprawnień.<br>Dodaj je w zakładce <strong>Ustawienia</strong>; do tego czasu możesz dodać grupy ręcznie.</div></div>`;
+    renderNewUserSummary();
+    return;
+  }
+  const visible = catalog.filter((p) => permissionMatches(p, q));
+  if (!visible.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania.</div>';
+    renderNewUserSummary();
+    return;
+  }
+  let lastCategory = null;
+  list.innerHTML = visible.map((p) => {
+    const header = p.category !== lastCategory && (p.category || lastCategory !== null)
+      ? `<div class="perm-category">${escapeHtml(p.category || 'Bez kategorii')}</div>` : '';
+    lastCategory = p.category;
+    const checked = state.newUser.permissions.has(p.id);
+    return `${header}
+      <label class="perm-item ${checked ? 'checked' : ''}">
+        <input type="checkbox" class="form-check-input perm-check" value="${escapeHtml(p.id)}" ${checked ? 'checked' : ''}>
+        <span class="perm-item-body">
+          <span class="perm-item-name">${escapeHtml(p.name)}${isCopied('perms', p.id) && checked ? fromRefBadge : ''}</span>
+          ${p.description ? `<span class="perm-item-desc">${escapeHtml(p.description)}</span>` : ''}
+          <span class="perm-item-groups">${permissionGroupsLine(p)}</span>
+        </span>
+      </label>`;
+  }).join('');
+  renderNewUserSummary();
+}
+
+document.getElementById('newUserPermList').addEventListener('change', (event) => {
+  const box = event.target.closest('.perm-check');
+  if (!box) return;
+  if (box.checked) state.newUser.permissions.add(box.value);
+  else state.newUser.permissions.delete(box.value);
+  box.closest('.perm-item').classList.toggle('checked', box.checked);
+  document.getElementById('newUserPermCount').textContent = String(state.newUser.permissions.size);
+  renderNewUserPermissions();
+
+  renderNewUserSummary();
+});
+document.getElementById('newUserPermSearch').addEventListener('input', debounce(renderNewUserPermissions, 150));
+
+// ----- Udziały sieciowe w kreatorze -----
+const SHARE_LEVELS = { r: 'Odczyt', rw: 'Odczyt i zapis' };
+
+function shareMatches(sh, q) {
+  if (!q) return true;
+  const hay = [sh.name, sh.description, sh.path, sh.readGroup?.name, sh.writeGroup?.name, dnLabel(sh.readGroup?.dn), dnLabel(sh.writeGroup?.dn)].join(' ').toLowerCase();
+  return q.split(/\s+/).every((word) => hay.includes(word));
+}
+
+function renderNewUserShares() {
+  const list = document.getElementById('newUserShareList');
+  const q = document.getElementById('newUserShareSearch').value.trim().toLowerCase();
+  const catalog = state.shareCatalog || [];
+  document.getElementById('newUserShareCount').textContent = String(state.newUser.shares.size);
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('folder')}<div>Nie zdefiniowano jeszcze udziałów sieciowych.<br>Dodaj je w zakładce <strong>Ustawienia</strong>.</div></div>`;
+    return;
+  }
+  const visible = catalog.filter((sh) => shareMatches(sh, q));
+  if (!visible.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak udziałów pasujących do wyszukiwania.</div>';
+    return;
+  }
+  list.innerHTML = visible.map((sh) => {
+    const level = state.newUser.shares.get(sh.id) || '';
+    const opt = (value, label) => `
+      <input type="radio" class="btn-check share-level" name="share-${escapeHtml(sh.id)}" id="share-${escapeHtml(sh.id)}-${value || 'none'}" value="${value}" data-id="${escapeHtml(sh.id)}" ${level === value ? 'checked' : ''}>
+      <label for="share-${escapeHtml(sh.id)}-${value || 'none'}">${label}</label>`;
+    return `
+      <div class="perm-item share-item ${level ? 'checked' : ''}" data-id="${escapeHtml(sh.id)}">
+        <span class="share-item-icon">${icon('folder')}</span>
+        <span class="perm-item-body flex-grow-1">
+          <span class="perm-item-name">${escapeHtml(sh.name)}${isCopied('shares', sh.id) && level ? fromRefBadge : ''}</span>
+          <span class="share-path font-monospace">${escapeHtml(sh.path)}</span>
+          ${sh.description ? `<span class="perm-item-desc">${escapeHtml(sh.description)}</span>` : ''}
+          <span class="perm-item-groups">
+            <span class="perm-group ${level === 'r' ? 'perm-group-on' : ''}" title="${escapeHtml(sh.readGroup.dn)}">${icon('eye')}${escapeHtml(sh.readGroup.name || dnLabel(sh.readGroup.dn))}</span>
+            <span class="perm-group ${level === 'rw' ? 'perm-group-on' : ''}" title="${escapeHtml(sh.writeGroup.dn)}">${icon('settings')}${escapeHtml(sh.writeGroup.name || dnLabel(sh.writeGroup.dn))}</span>
+          </span>
+        </span>
+        <span class="segmented segmented-sm share-levels" role="radiogroup" aria-label="Dostęp do ${escapeHtml(sh.name)}">
+          ${opt('', 'Brak')}${opt('r', 'Odczyt')}${opt('rw', 'Odczyt i zapis')}
+        </span>
+      </div>`;
+  }).join('');
+}
+
+document.getElementById('newUserShareList').addEventListener('change', (event) => {
+  const radio = event.target.closest('.share-level');
+  if (!radio) return;
+  if (radio.value) state.newUser.shares.set(radio.dataset.id, radio.value);
+  else state.newUser.shares.delete(radio.dataset.id);
+  renderNewUserShares();
+
+});
+document.getElementById('newUserShareSearch').addEventListener('input', debounce(renderNewUserShares, 150));
+
+function selectedShares() {
+  return (state.shareCatalog || [])
+    .filter((sh) => state.newUser.shares.has(sh.id))
+    .map((sh) => {
+      const level = state.newUser.shares.get(sh.id);
+      return { share: sh, level, group: level === 'rw' ? sh.writeGroup : sh.readGroup };
+    });
+}
+
+// Same rules as the server: permission groups + one group per share + other
+// groups; a read-write share never keeps its read-only (-r) group.
+function newUserResultingGroups() {
+  const map = new Map();
+  state.permissionCatalog
+    .filter((p) => state.newUser.permissions.has(p.id))
+    .forEach((p) => p.groups.forEach((g) => map.set(g.dn.toLowerCase(), g.dn)));
+  const shares = selectedShares();
+  shares.forEach(({ group }) => map.set(group.dn.toLowerCase(), group.dn));
+  state.newUser.groups.forEach((dn) => map.set(dn.toLowerCase(), dn));
+  shares.filter((x) => x.level === 'rw').forEach(({ share }) => map.delete(share.readGroup.dn.toLowerCase()));
+  return [...map.values()];
+}
+
+const USER_TYPE_LABELS = { 'eskulap-domain': 'Użytkownik domeny Eskulap' };
+
+function summaryRow(label, valueHtml) {
+  return `<dt>${escapeHtml(label)}</dt><dd>${valueHtml || '<span class="text-muted">—</span>'}</dd>`;
+}
+
+function summarySection(title, step, bodyHtml) {
+  return `
+    <section class="summary-section">
+      <div class="summary-section-head">
+        <span class="summary-section-title">${escapeHtml(title)}</span>
+        <button type="button" class="btn btn-sm btn-link px-0 summary-edit" data-goto-step="${step}">Zmień</button>
+      </div>
+      ${bodyHtml}
+    </section>`;
+}
+
+function yesNo(on, yes = 'Tak', no = 'Nie') {
+  return on ? `<span class="summary-flag on">${icon('check')} ${escapeHtml(yes)}</span>` : `<span class="summary-flag">${escapeHtml(no)}</span>`;
+}
+
+function renderNewUserSummary() {
+  const holder = document.getElementById('newUserFinalSummary');
+  if (!holder) return;
+  const val = (name) => newUserForm.querySelector(`[name="${name}"]`);
+  const checked = (id) => document.getElementById(id).checked;
+  const userType = newUserForm.querySelector('input[name="userType"]:checked')?.value || '';
+  const first = newUserFirstName.value.trim();
+  const last = newUserLastName.value.trim();
+  const login = newUserLogin.value.trim();
+  const ouDn = newUserOuDn.value;
+  const expiresMode = newUserForm.querySelector('input[name="accountExpiresModeNewUser"]:checked')?.value || 'never';
+  const expiresDate = val('accountExpiresDate').value;
+  const description = val('description').value.trim();
+  const refName = state.newUser.referenceDn ? document.getElementById('newUserReferenceName').textContent : '';
+
+  const selectedPerms = (state.permissionCatalog || []).filter((p) => state.newUser.permissions.has(p.id));
+  const shares = selectedShares();
+  const extraGroups = [...state.newUser.groups];
+  const allGroups = newUserResultingGroups().sort((a, b) => dnLabel(a).localeCompare(dnLabel(b), 'pl'));
+
+  const typeHtml = summarySection('Typ użytkownika', 1, `<dl class="summary-grid">${summaryRow('Typ konta', escapeHtml(USER_TYPE_LABELS[userType] || userType))}</dl>`);
+
+  const infoHtml = summarySection('Informacje o użytkowniku', 2, `
+    <dl class="summary-grid">
+      ${summaryRow('Użytkownik wzorcowy', refName ? `${escapeHtml(refName)}${state.newUser.copyFromRef ? ' <span class="badge text-bg-success fw-normal ms-1">uprawnienia skopiowane</span>' : ''}` : '')}
+      ${summaryRow('Imię i nazwisko', escapeHtml(`${first} ${last}`.trim()))}
+      ${summaryRow('Nazwa wyświetlana', escapeHtml(`${first} ${last}`.trim()))}
+      ${summaryRow('Login (sAMAccountName)', `<span class="font-monospace">${escapeHtml(login)}</span>`)}
+      ${summaryRow('Nazwa logowania (UPN)', AD_DOMAIN ? `<span class="font-monospace">${escapeHtml(login)}@${escapeHtml(AD_DOMAIN)}</span>` : '')}
+      ${summaryRow('Nazwa obiektu w AD', `<span class="font-monospace">${escapeHtml(login)}</span>`)}
+      ${summaryRow('Lokalizacja (OU)', ouDn ? `<span class="path-inline" title="${escapeHtml(ouDn)}">${dnToPathHtml(ouDn)}</span>` : '')}
+      ${summaryRow('Hasło', `<span class="font-monospace summary-password" data-shown="0">••••••••</span> <button type="button" class="btn btn-sm btn-link px-1 py-0 summary-show-pwd">pokaż</button>`)}
+      ${summaryRow('Opis', escapeHtml(description))}
+    </dl>
+    <div class="summary-subtitle">Opcje konta</div>
+    <dl class="summary-grid">
+      ${summaryRow('Wymuś zmianę hasła przy pierwszym logowaniu', yesNo(checked('newUserMustChangePwd')))}
+      ${summaryRow('Użytkownik nie może zmienić hasła', yesNo(checked('newUserCannotChangePwd')))}
+      ${summaryRow('Hasło nigdy nie wygasa', yesNo(checked('newUserPwdNeverExpires')))}
+      ${summaryRow('Konto wyłączone po utworzeniu', yesNo(checked('newUserAccountDisabled')))}
+      ${summaryRow('Wygasanie konta', expiresMode === 'date' && expiresDate ? `z końcem dnia ${escapeHtml(new Date(expiresDate).toLocaleDateString('pl-PL'))}` : 'nigdy')}
+    </dl>`);
+
+  const permsHtml = summarySection(`Uprawnienia (${selectedPerms.length})`, 3, `
+    ${selectedPerms.length
+      ? `<div class="summary-perms">${selectedPerms.map((p) => `
+          <div class="summary-perm">
+            <div class="summary-perm-name">${escapeHtml(p.name)}${p.category ? ` <span class="text-muted fw-normal">· ${escapeHtml(p.category)}</span>` : ''}${isCopied('perms', p.id) ? fromRefBadge : ''}</div>
+            <div class="perm-item-groups">${permissionGroupsLine(p)}</div>
+          </div>`).join('')}</div>`
+      : '<div class="text-muted small">Nie wybrano uprawnień.</div>'}`);
+
+  const sharesHtml = summarySection(`Udziały sieciowe (${shares.length})`, 4, shares.length
+    ? `<div class="summary-perms">${shares.map(({ share, level, group }) => `
+        <div class="summary-perm">
+          <div class="summary-perm-name">${escapeHtml(share.name)} <span class="badge ${level === 'rw' ? 'text-bg-warning' : 'text-bg-light border'} fw-normal ms-1">${escapeHtml(SHARE_LEVELS[level])}</span>${isCopied('shares', share.id) ? fromRefBadge : ''}</div>
+          <div class="small font-monospace text-muted">${escapeHtml(share.path)}</div>
+          <div class="perm-item-groups mt-1"><span class="perm-group" title="${escapeHtml(group.dn)}">${icon('group')}${escapeHtml(group.name || dnLabel(group.dn))}</span></div>
+        </div>`).join('')}</div>`
+    : '<div class="text-muted small">Nie wybrano udziałów.</div>');
+
+  const otherHtml = summarySection(`Inne grupy (${extraGroups.length})`, 5, extraGroups.length
+    ? `<div class="chip-list">${extraGroups.map((g) => `<span class="chip chip-sm ${isCopied('groups', g) ? 'chip-from-ref' : ''}" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}${isCopied('groups', g) ? fromRefBadge : ''}</span>`).join('')}</div>`
+    : '<div class="text-muted small">Brak innych grup.</div>');
+
+  const groupsHtml = `
+    <section class="summary-section summary-section-total">
+      <div class="summary-section-head"><span class="summary-section-title">Konto zostanie dodane do grup AD (${allGroups.length})</span></div>
+      ${allGroups.length
+        ? `<div class="chip-list">${allGroups.map((g) => `<span class="chip chip-sm" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}</span>`).join('')}</div>`
+        : '<div class="text-muted small">Brak grup poza grupą podstawową domeny.</div>'}
+    </section>`;
+
+  holder.innerHTML = `<div class="summary-layout"><div>${typeHtml}${infoHtml}</div><div>${permsHtml}${sharesHtml}${otherHtml}${groupsHtml}</div></div>`;
+}
+
+document.getElementById('newUserFinalSummary').addEventListener('click', (event) => {
+  const edit = event.target.closest('.summary-edit');
+  if (edit) {
+    showNewUserStep(Number(edit.dataset.gotoStep));
+    return;
+  }
+  const show = event.target.closest('.summary-show-pwd');
+  if (show) {
+    const span = show.parentElement.querySelector('.summary-password');
+    const shown = span.dataset.shown === '1';
+    span.textContent = shown ? '••••••••' : newUserPassword.value;
+    span.dataset.shown = shown ? '0' : '1';
+    show.textContent = shown ? 'pokaż' : 'ukryj';
+  }
+});
+
+// ===== Ustawienia: uprawnienia =====
+const permissionModal = new bootstrap.Modal(document.getElementById('permissionModal'));
+const permissionEdit = { groups: [] };
+
+function renderPermissionsTable() {
+  const body = document.getElementById('permissionsTableBody');
+  const q = document.getElementById('permissionsSearch').value.trim().toLowerCase();
+  const rows = (state.permissionCatalog || []).filter((p) => permissionMatches(p, q));
+  if (!state.permissionCatalog.length) {
+    body.innerHTML = `<tr><td colspan="4"><div class="empty-state">${icon('shield')}<div>Brak zdefiniowanych uprawnień. Kliknij <strong>Dodaj uprawnienie</strong>, aby utworzyć pierwsze.</div></div></td></tr>`;
+    return;
+  }
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="4"><div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania.</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((p) => `
+    <tr>
+      <td>
+        <div class="fw-semibold">${escapeHtml(p.name)}${p.category ? ` <span class="badge text-bg-light border fw-normal ms-1">${escapeHtml(p.category)}</span>` : ''}</div>
+        ${p.description ? `<div class="small text-muted">${escapeHtml(p.description)}</div>` : ''}
+      </td>
+      <td><div class="perm-item-groups">${permissionGroupsLine(p)}</div></td>
+      <td class="small text-muted">${escapeHtml(new Date(p.updatedAt).toLocaleString('pl-PL'))}${p.updatedBy ? `<div>${escapeHtml(p.updatedBy)}</div>` : ''}</td>
+      <td class="text-end text-nowrap">
+        <button type="button" class="btn-icon perm-edit" data-id="${escapeHtml(p.id)}" title="Edytuj" aria-label="Edytuj">${icon('settings')}</button>
+        <button type="button" class="btn-icon btn-icon-danger perm-delete" data-id="${escapeHtml(p.id)}" title="Usuń" aria-label="Usuń">${icon('x')}</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function refreshPermissionsTable() {
+  await loadPermissionCatalog();
+  renderPermissionsTable();
+}
+
+function renderPermissionEditGroups() {
+  const list = document.getElementById('permissionGroupsList');
+  list.innerHTML = permissionEdit.groups.length
+    ? permissionEdit.groups.map((g, idx) => `<div class="member-of-line"><span class="group-badge" title="${escapeHtml(g.dn)}">${dnChipContent(g.dn)}</span><button type="button" class="btn-icon btn-icon-sm perm-group-remove" data-index="${idx}" title="Usuń" aria-label="Usuń">${icon('x')}</button></div>`).join('')
+    : '<div class="chip-empty">Nie wybrano grup. Kliknij „Wybierz grupę”.</div>';
+}
+
+function openPermissionModal(permission = null) {
+  document.getElementById('permissionModalTitle').textContent = permission ? 'Edytuj uprawnienie' : 'Nowe uprawnienie';
+  document.getElementById('permissionId').value = permission?.id || '';
+  document.getElementById('permissionName').value = permission?.name || '';
+  document.getElementById('permissionCategory').value = permission?.category || '';
+  document.getElementById('permissionDescription').value = permission?.description || '';
+  permissionEdit.groups = (permission?.groups || []).map((g) => ({ ...g }));
+  const categories = [...new Set(state.permissionCatalog.map((p) => p.category).filter(Boolean))];
+  document.getElementById('permissionCategories').innerHTML = categories.map((c) => `<option value="${escapeHtml(c)}">`).join('');
+  renderPermissionEditGroups();
+  permissionModal.show();
+}
+
+document.getElementById('permissionModal').addEventListener('shown.bs.modal', (event) => {
+  if (event.target.id === 'permissionModal') document.getElementById('permissionName').focus();
+});
+document.getElementById('addPermissionBtn').addEventListener('click', () => openPermissionModal());
+document.getElementById('permissionsSearch').addEventListener('input', debounce(renderPermissionsTable, 150));
+document.getElementById('permissionAddGroupBtn').addEventListener('click', () => {
+  openGroupPicker((item) => {
+    const dn = item.dn || item.distinguishedName;
+    if (permissionEdit.groups.some((g) => g.dn.toLowerCase() === dn.toLowerCase())) {
+      showToast('Ta grupa jest już na liście', true);
+      return;
+    }
+    permissionEdit.groups.push({ dn, name: getDisplayName(item) });
+    renderPermissionEditGroups();
+  });
+});
+document.getElementById('permissionGroupsList').addEventListener('click', (event) => {
+  const btn = event.target.closest('.perm-group-remove');
+  if (!btn) return;
+  permissionEdit.groups.splice(Number(btn.dataset.index), 1);
+  renderPermissionEditGroups();
+});
+
+document.getElementById('permissionForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = document.getElementById('permissionId').value;
+  const payload = {
+    name: document.getElementById('permissionName').value.trim(),
+    category: document.getElementById('permissionCategory').value.trim(),
+    description: document.getElementById('permissionDescription').value.trim(),
+    groups: permissionEdit.groups
+  };
+  if (!payload.name) return showToast('Podaj nazwę uprawnienia', true);
+  if (!payload.groups.length) return showToast('Wybierz co najmniej jedną grupę AD', true);
+  const btn = document.getElementById('permissionSaveBtn');
+  try {
+    btn.disabled = true;
+    await api(id ? `/api/permissions/${encodeURIComponent(id)}` : '/api/permissions', {
+      method: id ? 'PUT' : 'POST',
+      body: JSON.stringify(payload)
+    });
+    permissionModal.hide();
+    showToast(id ? 'Zapisano uprawnienie' : 'Dodano uprawnienie');
+    await refreshPermissionsTable();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+  return undefined;
+});
+
+document.getElementById('permissionsTableBody').addEventListener('click', async (event) => {
+  const edit = event.target.closest('.perm-edit');
+  const del = event.target.closest('.perm-delete');
+  const find = (el) => state.permissionCatalog.find((p) => p.id === el.dataset.id);
+  if (edit) openPermissionModal(find(edit));
+  if (del) {
+    const p = find(del);
+    if (!p || !window.confirm(`Usunąć uprawnienie „${p.name}”? Grupy w AD i istniejące konta nie zostaną zmienione.`)) return;
+    try {
+      await api(`/api/permissions/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+      showToast('Usunięto uprawnienie');
+      await refreshPermissionsTable();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+});
+
+// ===== Ustawienia: udziały sieciowe =====
+const shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
+const shareEdit = { r: null, rw: null };
+
+function renderSharesTable() {
+  const body = document.getElementById('sharesTableBody');
+  const q = document.getElementById('sharesSearch').value.trim().toLowerCase();
+  if (!state.shareCatalog.length) {
+    body.innerHTML = `<tr><td colspan="5"><div class="empty-state">${icon('folder')}<div>Brak zdefiniowanych udziałów. Kliknij <strong>Dodaj udział</strong>.</div></div></td></tr>`;
+    return;
+  }
+  const rows = state.shareCatalog.filter((sh) => shareMatches(sh, q));
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5"><div class="lookup-empty">Brak udziałów pasujących do wyszukiwania.</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((sh) => `
+    <tr>
+      <td><div class="fw-semibold">${escapeHtml(sh.name)}</div>${sh.description ? `<div class="small text-muted">${escapeHtml(sh.description)}</div>` : ''}</td>
+      <td class="font-monospace small text-break">${escapeHtml(sh.path)}</td>
+      <td><div class="perm-item-groups flex-column align-items-start">
+        <span class="perm-group" title="${escapeHtml(sh.readGroup.dn)}">${icon('eye')}${escapeHtml(sh.readGroup.name || dnLabel(sh.readGroup.dn))}</span>
+        <span class="perm-group" title="${escapeHtml(sh.writeGroup.dn)}">${icon('settings')}${escapeHtml(sh.writeGroup.name || dnLabel(sh.writeGroup.dn))}</span>
+      </div></td>
+      <td class="small text-muted">${escapeHtml(new Date(sh.updatedAt).toLocaleString('pl-PL'))}${sh.updatedBy ? `<div>${escapeHtml(sh.updatedBy)}</div>` : ''}</td>
+      <td class="text-end text-nowrap">
+        <button type="button" class="btn-icon share-edit" data-id="${escapeHtml(sh.id)}" title="Edytuj" aria-label="Edytuj">${icon('settings')}</button>
+        <button type="button" class="btn-icon btn-icon-danger share-delete" data-id="${escapeHtml(sh.id)}" title="Usuń" aria-label="Usuń">${icon('x')}</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function refreshSharesTable() {
+  await loadShareCatalog();
+  renderSharesTable();
+}
+
+function renderShareSlots() {
+  [['r', 'shareReadSlot'], ['rw', 'shareWriteSlot']].forEach(([level, id]) => {
+    const g = shareEdit[level];
+    const suffixOk = !g || new RegExp(`-${level}$`, 'i').test(g.name || dnLabel(g.dn));
+    document.getElementById(id).innerHTML = g
+      ? `<div class="member-of-line"><span class="group-badge" title="${escapeHtml(g.dn)}">${dnChipContent(g.dn)}</span><button type="button" class="btn-icon btn-icon-sm share-slot-clear" data-level="${level}" title="Usuń" aria-label="Usuń">${icon('x')}</button></div>
+         ${suffixOk ? '' : `<div class="field-hint text-warning-emphasis">Nazwa grupy nie kończy się na „-${level}”. Upewnij się, że to właściwa grupa.</div>`}`
+      : '<div class="chip-empty py-2">Nie wybrano grupy</div>';
+  });
+}
+
+// "Kardio-Docs-r" <-> "Kardio-Docs-rw": look up the counterpart group by name.
+async function autoPairShareGroup(level, picked) {
+  const other = level === 'r' ? 'rw' : 'r';
+  if (shareEdit[other]) return;
+  const name = picked.name || dnLabel(picked.dn);
+  const base = name.replace(/-(rw|r)$/i, '');
+  if (base === name) return;
+  try {
+    const target = `${base}-${other}`.toLowerCase();
+    const rows = await api(`/api/search?q=${encodeURIComponent(`${base}-${other}`)}&type=group`);
+    const match = rows.find((row) => [row.cn, row.sAMAccountName, row.name].some((v) => String(v || '').toLowerCase() === target));
+    if (match && !shareEdit[other]) {
+      shareEdit[other] = { dn: match.dn || match.distinguishedName, name: getDisplayName(match) };
+      renderShareSlots();
+      showToast(`Dobrano automatycznie grupę ${shareEdit[other].name}`);
+    }
+  } catch {
+    // brak dopasowania nie jest błędem
+  }
+}
+
+function openShareModal(share = null) {
+  document.getElementById('shareModalTitle').textContent = share ? 'Edytuj udział sieciowy' : 'Nowy udział sieciowy';
+  document.getElementById('shareId').value = share?.id || '';
+  document.getElementById('shareName').value = share?.name || '';
+  document.getElementById('sharePath').value = share?.path || '';
+  document.getElementById('shareDescription').value = share?.description || '';
+  shareEdit.r = share?.readGroup ? { ...share.readGroup } : null;
+  shareEdit.rw = share?.writeGroup ? { ...share.writeGroup } : null;
+  renderShareSlots();
+  shareModal.show();
+}
+
+document.getElementById('shareModal').addEventListener('shown.bs.modal', (event) => {
+  if (event.target.id === 'shareModal') document.getElementById('shareName').focus();
+});
+document.getElementById('addShareBtn').addEventListener('click', () => openShareModal());
+document.getElementById('sharesSearch').addEventListener('input', debounce(renderSharesTable, 150));
+document.querySelectorAll('.share-pick').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const { level } = btn.dataset;
+    openGroupPicker((item) => {
+      const picked = { dn: item.dn || item.distinguishedName, name: getDisplayName(item) };
+      const other = shareEdit[level === 'r' ? 'rw' : 'r'];
+      if (other && other.dn.toLowerCase() === picked.dn.toLowerCase()) {
+        showToast('Ta grupa jest już wybrana jako druga grupa udziału', true);
+        return;
+      }
+      shareEdit[level] = picked;
+      renderShareSlots();
+      autoPairShareGroup(level, picked);
+    });
+  });
+});
+document.getElementById('shareForm').addEventListener('click', (event) => {
+  const btn = event.target.closest('.share-slot-clear');
+  if (!btn) return;
+  shareEdit[btn.dataset.level] = null;
+  renderShareSlots();
+});
+
+document.getElementById('shareForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = document.getElementById('shareId').value;
+  const payload = {
+    name: document.getElementById('shareName').value.trim(),
+    path: document.getElementById('sharePath').value.trim(),
+    description: document.getElementById('shareDescription').value.trim(),
+    readGroup: shareEdit.r,
+    writeGroup: shareEdit.rw
+  };
+  if (!payload.name || !payload.path) return showToast('Podaj nazwę i ścieżkę udziału', true);
+  if (!payload.readGroup || !payload.writeGroup) return showToast('Wybierz obie grupy: -r i -rw', true);
+  const btn = document.getElementById('shareSaveBtn');
+  try {
+    btn.disabled = true;
+    await api(id ? `/api/shares/${encodeURIComponent(id)}` : '/api/shares', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    shareModal.hide();
+    showToast(id ? 'Zapisano udział' : 'Dodano udział');
+    await refreshSharesTable();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+  return undefined;
+});
+
+document.getElementById('sharesTableBody').addEventListener('click', async (event) => {
+  const edit = event.target.closest('.share-edit');
+  const del = event.target.closest('.share-delete');
+  const find = (el) => state.shareCatalog.find((sh) => sh.id === el.dataset.id);
+  if (edit) openShareModal(find(edit));
+  if (del) {
+    const sh = find(del);
+    if (!sh || !window.confirm(`Usunąć udział „${sh.name}” ze słownika? Grupy w AD i istniejące konta nie zostaną zmienione.`)) return;
+    try {
+      await api(`/api/shares/${encodeURIComponent(sh.id)}`, { method: 'DELETE' });
+      showToast('Usunięto udział');
+      await refreshSharesTable();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+});
+
+document.getElementById('settings-tab').addEventListener('shown.bs.tab', () => {
+  refreshPermissionsTable();
+  refreshSharesTable();
 });
 
 // ===== Nowa grupa =====

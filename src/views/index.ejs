@@ -37,6 +37,11 @@
           <svg class="icon"><use href="#i-report"/></svg><span>Raporty</span>
         </button>
       </li>
+      <li>
+        <button class="app-nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-panel" data-page-title="Ustawienia" data-page-sub="Uprawnienia i udziały sieciowe oraz ich mapowanie na grupy AD" type="button" role="tab">
+          <svg class="icon"><use href="#i-settings"/></svg><span>Ustawienia</span>
+        </button>
+      </li>
     </ul>
 
     <div class="app-nav-label">Szybkie akcje</div>
@@ -304,8 +309,11 @@
             <section class="card">
               <div class="card-body p-2">
                 <div class="report-nav" id="reportsList">
-                  <button class="report-link active" data-report="stale-logons" type="button">
-                    <svg class="icon"><use href="#i-clock"/></svg><span>Nieaktywne konta</span>
+                  <button class="report-link active" data-report="stale-users" type="button">
+                    <svg class="icon"><use href="#i-user"/></svg><span>Nieaktywni użytkownicy</span>
+                  </button>
+                  <button class="report-link" data-report="stale-computers" type="button">
+                    <svg class="icon"><use href="#i-computer"/></svg><span>Nieaktywne komputery</span>
                   </button>
                   <button class="report-link" data-report="portal-activity" type="button">
                     <svg class="icon"><use href="#i-activity"/></svg><span>Aktywność portalu</span>
@@ -319,22 +327,55 @@
           </div>
 
           <div class="col-lg-9">
-            <section class="card report-page" data-report-page="stale-logons">
-              <div class="card-header">Nieaktywne konta AD</div>
+<% [
+  { id: 'stale-users', kind: 'user', title: 'Nieaktywne konta użytkowników', hint: 'Włączone konta użytkowników bez logowania w podanym okresie. Konta utworzone w tym okresie są pomijane.' },
+  { id: 'stale-computers', kind: 'computer', title: 'Nieaktywne komputery', hint: 'Włączone konta komputerów bez logowania do domeny w podanym okresie. Aktywny komputer zmienia też hasło konta co ok. 30 dni (kolumna „Hasło konta”).' }
+].forEach((r, idx) => { %>
+            <section class="card report-page stale-report <%= idx ? 'd-none' : '' %>" data-report-page="<%= r.id %>" data-kind="<%= r.kind %>">
+              <div class="card-header">Raport: <%= r.title %></div>
               <div class="card-body">
-                <div class="d-flex flex-wrap align-items-end gap-2 mb-3">
-                  <div>
-                    <label class="form-label small text-muted mb-1" for="reportYears">Brak logowania od</label>
-                    <div class="input-group" style="max-width: 220px;">
-                      <input id="reportYears" type="number" class="form-control" value="2" min="1" />
-                      <span class="input-group-text">lat</span>
+                <div class="field-hint mt-0 mb-3"><%= r.hint %></div>
+                <form class="row g-3 align-items-end mb-3 stale-form">
+                  <div class="col-md-auto">
+                    <label class="form-label">Brak logowania od</label>
+                    <div class="input-group stale-period">
+                      <input type="number" class="form-control stale-amount" value="<%= r.kind === 'computer' ? 90 : 2 %>" min="1" />
+                      <select class="form-select stale-unit">
+                        <option value="1" <%= r.kind === 'computer' ? 'selected' : '' %>>dni</option>
+                        <option value="30">miesięcy</option>
+                        <option value="365" <%= r.kind === 'computer' ? '' : 'selected' %>>lat</option>
+                      </select>
                     </div>
                   </div>
-                  <button class="btn btn-primary" id="loadReportBtn">Generuj raport</button>
-                </div>
-                <div id="reportResult" class="small"></div>
+                  <div class="col-md">
+                    <label class="form-label">Zakres</label>
+                    <div class="d-flex gap-2 align-items-center">
+                      <div class="ou-field flex-grow-1" data-target-input="staleOu-<%= r.kind %>">
+                        <input type="hidden" id="staleOu-<%= r.kind %>" class="stale-ou" />
+                        <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="staleOu-<%= r.kind %>">
+                          <svg class="icon"><use href="#i-folder"/></svg>
+                          <span class="ou-field-text" data-placeholder="Cała domena">Cała domena</span>
+                          <svg class="icon ou-field-caret"><use href="#i-chevron-down"/></svg>
+                        </button>
+                      </div>
+                      <button type="button" class="btn-icon stale-clear-ou" title="Cała domena" aria-label="Wyczyść OU"><svg class="icon"><use href="#i-x"/></svg></button>
+                    </div>
+                  </div>
+                  <div class="col-12 d-flex flex-wrap align-items-center gap-3">
+                    <div class="form-check m-0">
+                      <input class="form-check-input stale-include-disabled" type="checkbox" id="staleDisabled-<%= r.kind %>">
+                      <label class="form-check-label" for="staleDisabled-<%= r.kind %>">Pokaż także wyłączone konta</label>
+                    </div>
+                    <div class="ms-auto d-flex gap-2">
+                      <button type="button" class="btn btn-outline-secondary stale-export" disabled>Eksportuj CSV</button>
+                      <button type="submit" class="btn btn-primary">Generuj raport</button>
+                    </div>
+                  </div>
+                </form>
+                <div class="stale-result small"></div>
               </div>
             </section>
+<% }) %>
 
             <section class="card report-page d-none" data-report-page="portal-activity">
               <div class="card-header">Aktywność portalu</div>
@@ -388,6 +429,60 @@
           </div>
         </div>
       </section>
+      <!-- ===== Ustawienia ===== -->
+      <section class="tab-pane fade" id="settings-panel" role="tabpanel" aria-labelledby="settings-tab">
+        <section class="card">
+          <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+              <div>Uprawnienia użytkowników</div>
+              <div class="small text-muted fw-normal">Uprawnienia wybierane w kroku 3 kreatora nowego użytkownika. Każde uprawnienie dodaje konto do przypisanych grup AD.</div>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="addPermissionBtn"><svg class="icon"><use href="#i-plus"/></svg> Dodaj uprawnienie</button>
+          </div>
+          <div class="card-body pb-2">
+            <div class="search-input-wrap" style="max-width: 420px;">
+              <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+              <input class="form-control" id="permissionsSearch" placeholder="Szukaj uprawnienia, opisu lub grupy…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 settings-table" id="permissionsTable">
+              <thead>
+                <tr><th>Uprawnienie</th><th>Grupy AD</th><th style="width:170px;">Ostatnia zmiana</th><th style="width:110px;" class="text-end">Akcje</th></tr>
+              </thead>
+              <tbody id="permissionsTableBody">
+                <tr><td colspan="4"><div class="empty-state"><span class="spinner-border spinner-border-sm text-primary"></span><div>Ładowanie…</div></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card mt-4">
+          <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+              <div>Udziały sieciowe</div>
+              <div class="small text-muted fw-normal">Udziały wybierane w kroku 4 kreatora. Każdy udział ma grupę tylko do odczytu (<code>-r</code>) i grupę do odczytu i zapisu (<code>-rw</code>).</div>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="addShareBtn"><svg class="icon"><use href="#i-plus"/></svg> Dodaj udział</button>
+          </div>
+          <div class="card-body pb-2">
+            <div class="search-input-wrap" style="max-width: 420px;">
+              <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+              <input class="form-control" id="sharesSearch" placeholder="Szukaj udziału, ścieżki lub grupy…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 settings-table" id="sharesTable">
+              <thead>
+                <tr><th>Udział</th><th>Ścieżka</th><th>Grupy AD</th><th style="width:170px;">Ostatnia zmiana</th><th style="width:110px;" class="text-end">Akcje</th></tr>
+              </thead>
+              <tbody id="sharesTableBody">
+                <tr><td colspan="5"><div class="empty-state"><span class="spinner-border spinner-border-sm text-primary"></span><div>Ładowanie…</div></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
     </div>
   </main>
 </div>
@@ -397,6 +492,8 @@
 <%- include('modals/newGroupModal') %>
 <%- include('modals/ouPickerModal') %>
 <%- include('modals/groupToolsModals') %>
+<%- include('modals/permissionModal') %>
+<%- include('modals/shareModal') %>
 
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
   <div id="appToast" class="toast app-toast align-items-center border-0" role="alert">

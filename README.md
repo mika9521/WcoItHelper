@@ -9,13 +9,14 @@ Modularny portal do zarządzania AD pod środowisko szpitalne:
 - zarządzanie `memberOf` (dodawanie grup, kopiowanie zaznaczonych grup od użytkownika referencyjnego),
 - zarządzanie członkami grupy (dodawanie/usuwanie kont bezpośrednio z poziomu obiektu grupy),
 - przenoszenie obiektu do OU,
-- kreator nowego użytkownika (opcjonalnie na wzór istniejącego konta: kopiuje OU i grupy; login generowany automatycznie w formacie `nazwisko.i`, edytowalny; obiekt w AD nazywa się tak jak login),
+- kreator nowego użytkownika w 6 krokach: typ konta, dane użytkownika (z opcją kopiowania uprawnień od wzorca), uprawnienia, udziały sieciowe, inne grupy, podsumowanie (opcjonalnie na wzór istniejącego konta: kopiuje OU i grupy; login generowany automatycznie w formacie `nazwisko.i`, edytowalny; obiekt w AD nazywa się tak jak login),
 - wybór OU z drzewem katalogu i wyszukiwarką OU,
+- ustawienia: słownik uprawnień mapowanych na grupy AD (`data/permissions.json`) oraz udziałów sieciowych z grupami `-r` / `-rw` (`data/shares.json`), używane w kreatorze,
 - podgląd i eksport (PDF / schowek) kluczy odzyskiwania BitLocker dla komputerów,
 - blokowanie konta (soft delete): wyłączenie, usunięcie ze wszystkich grup (lista grup zapisywana w logach) i przeniesienie do OU zablokowane_konta,
 - podgląd i usuwanie certyfikatów (userCertificate) przypisanych do konta,
 - odblokowywanie kont przeniesionych do OU zablokowane_konta (z wyborem docelowego OU),
-- zakładka raportów (np. logowania starsze niż X lat),
+- raporty nieaktywnych użytkowników i komputerów (bez kont wyłączonych, zakres OU, eksport CSV), aktywność portalu, historia logowań,
 - szczegółowe logi zmian (kto, co i jakie wartości zmienił),
 - toasty i modale w UI,
 - **działanie offline UI** z pełnym Bootstrapem dostarczonym lokalnie z `node_modules/bootstrap/dist` (bez CDN).
@@ -47,7 +48,8 @@ npm run dev
 
 ## Ważne dla AD
 
-- Do ustawiania haseł i modyfikacji kont używaj `LDAPS`.
+- Do ustawiania haseł i modyfikacji kont używaj `LDAPS` (lub StartTLS). Bez szyfrowania AD odrzuca ustawienie hasła (`0000001F ... WILL_NOT_PERFORM`) i portal nie pozwoli utworzyć konta.
+- Opcja „Użytkownik nie może zmienić hasła” jest zapisywana jako wpisy ACL (odmowa prawa „Change Password” dla SELF i Everyone), tak jak w ADUC; konto serwisowe potrzebuje prawa zapisu uprawnień (WRITE_DAC) do edycji tej opcji na istniejących kontach.
 - Konto serwisowe powinno mieć tylko minimalne wymagane uprawnienia.
 - W produkcji ustaw `AD_TLS_REJECT_UNAUTHORIZED=true` i poprawny certyfikat CA.
 

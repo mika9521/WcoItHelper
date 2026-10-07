@@ -1,0 +1,45 @@
+<div class="modal fade" id="permissionModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <form id="permissionForm" class="modal-content" autocomplete="off" novalidate>
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-shield"/></svg></span>
+          <div>
+            <h5 class="modal-title" id="permissionModalTitle">Nowe uprawnienie</h5>
+            <div class="modal-subtitle">Uprawnienie dodaje konto do wskazanych grup AD</div>
+          </div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="permissionId" />
+        <div class="row g-3">
+          <div class="col-md-8">
+            <label class="form-label" for="permissionName">Nazwa uprawnienia <span class="text-danger">*</span></label>
+            <input class="form-control" id="permissionName" maxlength="120" placeholder="np. Dostęp do VPN" required />
+          </div>
+          <div class="col-md-4">
+            <label class="form-label" for="permissionCategory">Kategoria</label>
+            <input class="form-control" id="permissionCategory" maxlength="80" placeholder="np. Systemy szpitalne" list="permissionCategories" />
+            <datalist id="permissionCategories"></datalist>
+          </div>
+          <div class="col-12">
+            <label class="form-label" for="permissionDescription">Opis</label>
+            <textarea class="form-control" id="permissionDescription" rows="3" maxlength="1000" placeholder="Co daje to uprawnienie i komu się je nadaje"></textarea>
+          </div>
+          <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+              <label class="form-label mb-0">Grupy AD <span class="text-danger">*</span></label>
+              <button type="button" class="btn btn-sm btn-outline-primary" id="permissionAddGroupBtn"><svg class="icon"><use href="#i-plus"/></svg> Wybierz grupę</button>
+            </div>
+            <div class="group-member-list" id="permissionGroupsList"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+        <button type="submit" class="btn btn-primary" id="permissionSaveBtn">Zapisz</button>
+      </div>
+    </form>
+  </div>
+</div>

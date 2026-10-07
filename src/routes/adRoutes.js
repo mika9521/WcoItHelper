@@ -25,6 +25,18 @@ const {
 } = require('../services/ad/adService');
 const { staleLogons } = require('../services/reports/reportService');
 const {
+  listPermissions,
+  createPermission,
+  updatePermission,
+  deletePermission,
+  getPermissionsByIds,
+  listShares,
+  createShare,
+  updateShare,
+  deleteShare,
+  resolveShareAccess
+} = require('../services/permissions/permissionService');
+const {
   logEvent,
   readEvents,
   getObjectEvents,
@@ -530,16 +542,34 @@ router.get('/api/user/login-availability', async (req, res) => {
 
 router.post('/api/user/create', async (req, res) => {
   try {
-    const result = await createUser(req.body, adAuthFromRequest(req));
+    // Permissions are resolved to groups here (not trusted from the client),
+    // then merged with any additional groups picked in the wizard.
+    const permissions = await getPermissionsByIds(req.body?.permissionIds);
+    const shareAccess = await resolveShareAccess(req.body?.shareAccess);
+    const groupMap = new Map();
+    permissions.forEach((p) => p.groups.forEach((g) => groupMap.set(g.dn.toLowerCase(), g.dn)));
+    shareAccess.forEach(({ group }) => groupMap.set(group.dn.toLowerCase(), group.dn));
+    (Array.isArray(req.body?.groups) ? req.body.groups : []).forEach((dn) => {
+      if (dn) groupMap.set(String(dn).toLowerCase(), String(dn));
+    });
+    // A read-write share never comes with its read-only group as well.
+    shareAccess.filter((a) => a.level === 'rw').forEach(({ share }) => groupMap.delete(share.readGroup.dn.toLowerCase()));
+    const result = await createUser({ ...req.body, groups: [...groupMap.values()] }, adAuthFromRequest(req));
     await audit(req, {
       action: 'user_create',
-      status: 'success',
+      status: result.failedGroups?.length ? 'error' : 'success',
       scopeType: 'user',
       scopeDn: result?.dn || '',
-      message: 'Utworzenie użytkownika',
+      message: result.failedGroups?.length
+        ? `Utworzenie użytkownika (nie dodano do ${result.failedGroups.length} grup)`
+        : 'Utworzenie użytkownika',
       details: {
         login: req.body?.login || '',
+        userType: req.body?.userType || '',
         referenceUserDn: req.body?.referenceUserDn || '',
+        permissions: permissions.map((p) => ({ id: p.id, name: p.name })),
+        shares: shareAccess.map(({ share, level, group }) => ({ id: share.id, name: share.name, path: share.path, level, groupDn: group.dn })),
+        settings: result?.settings || {},
         addedGroups: result?.addedGroups || [],
         failedGroups: result?.failedGroups || []
       }
@@ -556,23 +586,79 @@ router.post('/api/user/create', async (req, res) => {
   }
 });
 
+function registerCrudRoutes(basePath, auditPrefix, label, store) {
+  router.get(basePath, async (req, res) => {
+    try {
+      res.json(await store.list());
+    } catch (error) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+
+  router.post(basePath, async (req, res) => {
+    try {
+      const item = await store.create(req.body, req.session?.user?.login || '');
+      await audit(req, { action: `${auditPrefix}_create`, status: 'success', message: `Dodano ${label} „${item.name}”`, details: { item } });
+      res.json(item);
+    } catch (error) {
+      await audit(req, { action: `${auditPrefix}_create`, status: 'error', message: error.message, details: { payload: req.body } });
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+
+  router.put(`${basePath}/:id`, async (req, res) => {
+    try {
+      const { before, after } = await store.update(req.params.id, req.body, req.session?.user?.login || '');
+      await audit(req, { action: `${auditPrefix}_update`, status: 'success', message: `Zmieniono ${label} „${after.name}”`, details: { before, after } });
+      res.json(after);
+    } catch (error) {
+      await audit(req, { action: `${auditPrefix}_update`, status: 'error', message: error.message, details: { id: req.params.id } });
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+
+  router.delete(`${basePath}/:id`, async (req, res) => {
+    try {
+      const item = await store.remove(req.params.id);
+      await audit(req, { action: `${auditPrefix}_delete`, status: 'success', message: `Usunięto ${label} „${item.name}”`, details: { item } });
+      res.json({ deleted: true });
+    } catch (error) {
+      await audit(req, { action: `${auditPrefix}_delete`, status: 'error', message: error.message, details: { id: req.params.id } });
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+}
+
+registerCrudRoutes('/api/permissions', 'permission', 'uprawnienie', {
+  list: listPermissions, create: createPermission, update: updatePermission, remove: deletePermission
+});
+registerCrudRoutes('/api/shares', 'share', 'udział', {
+  list: listShares, create: createShare, update: updateShare, remove: deleteShare
+});
+
 router.get('/api/reports/stale-logons', async (req, res) => {
+  const kind = req.query.kind === 'computer' ? 'computer' : 'user';
+  const days = Math.max(1, Math.min(Number(req.query.days) || Number(req.query.years || 2) * 365, 36500));
+  const includeDisabled = req.query.includeDisabled === '1';
+  const ouDn = String(req.query.ouDn || '');
   try {
-    const years = Number(req.query.years || 2);
-    const report = await staleLogons(years, adAuthFromRequest(req));
+    const report = await staleLogons({ kind, days, includeDisabled, ouDn }, adAuthFromRequest(req));
     await audit(req, {
       action: 'report_stale_logons',
       status: 'success',
-      message: 'Wygenerowano raport nieaktywnych kont',
-      details: { years, records: report.length }
+      scopeType: kind,
+      scopeDn: ouDn,
+      message: kind === 'computer' ? 'Wygenerowano raport nieaktywnych komputerów' : 'Wygenerowano raport nieaktywnych kont',
+      details: { kind, days, includeDisabled, ouDn, records: report.length }
     });
     res.json(report);
   } catch (error) {
     await audit(req, {
       action: 'report_stale_logons',
       status: 'error',
+      scopeType: kind,
       message: error.message,
-      details: { years: Number(req.query?.years || 2) }
+      details: { kind, days, includeDisabled, ouDn }
     });
     res.status(error.status || 500).json({ message: error.message });
   }
