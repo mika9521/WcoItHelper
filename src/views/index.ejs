@@ -154,7 +154,7 @@
       <section class="tab-pane fade" id="search-panel" role="tabpanel" aria-labelledby="search-tab">
         <section class="card mb-3">
           <div class="card-body">
-            <div class="search-toolbar">
+            <form class="search-toolbar" id="searchForm" autocomplete="off">
               <div class="segmented" role="radiogroup" aria-label="Typ obiektu">
                 <input type="radio" class="btn-check" name="typeFilter" id="tf-all" value="all" checked>
                 <label for="tf-all">Wszystkie</label>
@@ -164,33 +164,104 @@
                 <label for="tf-computer">Komputery</label>
                 <input type="radio" class="btn-check" name="typeFilter" id="tf-group" value="group">
                 <label for="tf-group">Grupy</label>
-                <input type="radio" class="btn-check" name="typeFilter" id="tf-ou" value="ou-selection">
-                <label for="tf-ou">Zawartość OU</label>
               </div>
               <div class="search-input-wrap" id="searchTextWrap">
                 <svg class="icon search-input-icon"><use href="#i-search"/></svg>
-                <input id="searchInput" class="form-control" placeholder="Nazwa, login lub nazwa wyświetlana…" autocomplete="off" />
+                <input id="searchInput" class="form-control" placeholder="Szukaj… (% = dowolny ciąg, np. kow% lub %ski)" />
               </div>
-              <div class="search-input-wrap d-none" id="searchOuWrap">
-                <div class="ou-field" data-target-input="searchOuDn">
-                  <input type="hidden" id="searchOuDn" />
-                  <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="searchOuDn">
-                    <svg class="icon"><use href="#i-folder"/></svg>
-                    <span class="ou-field-text" data-placeholder="Wybierz OU do przeglądania…">Wybierz OU do przeglądania…</span>
-                    <svg class="icon ou-field-caret"><use href="#i-chevron-down"/></svg>
-                  </button>
+              <button type="button" class="btn btn-outline-secondary" id="toggleFiltersBtn" data-bs-toggle="collapse" data-bs-target="#searchFilters" aria-expanded="false">
+                <svg class="icon"><use href="#i-settings"/></svg> Filtry
+                <span class="badge rounded-pill text-bg-primary d-none" id="activeFiltersCount">0</span>
+              </button>
+              <button type="submit" id="searchBtn" class="btn btn-primary search-btn"><svg class="icon"><use href="#i-search"/></svg> Szukaj</button>
+            </form>
+
+            <div class="collapse" id="searchFilters">
+              <div class="search-filters">
+                <div class="row g-3">
+                  <div class="col-lg-6">
+                    <label class="form-label">Jednostka organizacyjna</label>
+                    <div class="d-flex gap-2 align-items-center">
+                      <div class="ou-field flex-grow-1" data-target-input="searchOuDn">
+                        <input type="hidden" id="searchOuDn" />
+                        <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="searchOuDn">
+                          <svg class="icon"><use href="#i-folder"/></svg>
+                          <span class="ou-field-text" data-placeholder="Cała domena">Cała domena</span>
+                          <svg class="icon ou-field-caret"><use href="#i-chevron-down"/></svg>
+                        </button>
+                      </div>
+                      <button type="button" class="btn-icon" id="clearSearchOuBtn" title="Cała domena" aria-label="Wyczyść OU"><svg class="icon"><use href="#i-x"/></svg></button>
+                    </div>
+                    <div class="form-check mt-2">
+                      <input class="form-check-input" type="checkbox" id="searchSubtree" checked>
+                      <label class="form-check-label" for="searchSubtree">Uwzględnij podjednostki</label>
+                    </div>
+                  </div>
+                  <div class="col-sm-6 col-lg-3">
+                    <label class="form-label" for="searchField">Szukaj w polu</label>
+                    <select class="form-select" id="searchField">
+                      <option value="any" title="nazwa, login, imię, nazwisko, e-mail">Dowolne</option>
+                      <option value="sAMAccountName">Login (sAMAccountName)</option>
+                      <option value="displayName">Nazwa wyświetlana</option>
+                      <option value="givenName">Imię</option>
+                      <option value="sn">Nazwisko</option>
+                      <option value="mail">E-mail / UPN</option>
+                      <option value="description">Opis</option>
+                      <option value="department">Dział</option>
+                      <option value="title">Stanowisko</option>
+                    </select>
+                  </div>
+                  <div class="col-sm-6 col-lg-3">
+                    <label class="form-label" for="searchStatus">Status konta</label>
+                    <select class="form-select" id="searchStatus">
+                      <option value="">Dowolny</option>
+                      <option value="enabled">Tylko włączone</option>
+                      <option value="disabled">Tylko wyłączone</option>
+                    </select>
+                  </div>
+                  <div class="col-sm-8 col-lg-6">
+                    <label class="form-label" for="searchLogon">Ostatnie logowanie</label>
+                    <div class="d-flex gap-2">
+                      <select class="form-select" id="searchLogon">
+                        <option value="">Dowolne</option>
+                        <option value="within">W ciągu ostatnich…</option>
+                        <option value="older">Brak logowania od… (lub nigdy)</option>
+                        <option value="never">Nigdy się nie logował</option>
+                      </select>
+                      <div class="input-group search-days d-none" id="searchDaysWrap">
+                        <input type="number" class="form-control" id="searchDays" value="90" min="1" />
+                        <span class="input-group-text">dni</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="col-sm-4 col-lg-3">
+                    <label class="form-label" for="searchLimit">Maks. wyników</label>
+                    <select class="form-select" id="searchLimit">
+                      <option value="50">50</option>
+                      <option value="100">100</option>
+                      <option value="250">250</option>
+                      <option value="500">500</option>
+                    </select>
+                  </div>
+                  <div class="col-lg-3 d-flex align-items-end justify-content-lg-end">
+                    <button type="button" class="btn btn-link text-decoration-none px-0" id="resetFiltersBtn">Wyczyść filtry</button>
+                  </div>
+                </div>
+                <div class="field-hint mt-3">
+                  <strong>Wzorce:</strong> <code>kow</code> = zawiera „kow”, <code>kow%</code> = zaczyna się od, <code>%ski</code> = kończy się na, <code>%an%ski</code> = zawiera oba fragmenty w tej kolejności.
+                  Puste pole + wybrane OU = cała zawartość OU.
                 </div>
               </div>
-              <button id="searchBtn" class="btn btn-primary search-btn"><svg class="icon"><use href="#i-search"/></svg> Szukaj</button>
             </div>
           </div>
         </section>
 
         <section class="card">
           <div class="card-header d-flex justify-content-between align-items-center">
-            <div class="d-flex align-items-center gap-2">
+            <div class="d-flex align-items-center gap-2 flex-wrap">
               <span>Wyniki</span>
               <span class="badge rounded-pill text-bg-light border" id="resultsCount">0</span>
+              <span class="small text-warning-emphasis d-none" id="resultsTruncated"></span>
             </div>
             <button
               type="button"
@@ -211,14 +282,15 @@
             <table class="table table-hover align-middle mb-0" id="resultsTable">
               <thead>
               <tr>
-                <th>Obiekt</th>
-                <th>Lokalizacja</th>
-                <th style="width:130px;">Status</th>
+                <th class="sortable" data-sort="name">Obiekt</th>
+                <th class="sortable" data-sort="path">Lokalizacja</th>
+                <th class="sortable" data-sort="logon" style="width:170px;" title="lastLogonTimestamp – replikowany między kontrolerami, opóźnienie do ok. 14 dni">Ostatnie logowanie</th>
+                <th class="sortable" data-sort="status" style="width:130px;">Status</th>
                 <th style="width:150px;" class="text-end">Akcje</th>
               </tr>
               </thead>
               <tbody id="results">
-                <tr><td colspan="4"><div class="empty-state"><svg class="icon"><use href="#i-search"/></svg><div>Wpisz frazę i kliknij <strong>Szukaj</strong>, aby wyświetlić obiekty.</div></div></td></tr>
+                <tr><td colspan="5"><div class="empty-state"><svg class="icon"><use href="#i-search"/></svg><div>Wpisz frazę lub ustaw filtry i kliknij <strong>Szukaj</strong>, aby wyświetlić obiekty.</div></div></td></tr>
               </tbody>
             </table>
           </div>

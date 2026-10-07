@@ -2,6 +2,7 @@ const express = require('express');
 const {
   searchObjects,
   searchObjectsInOu,
+  advancedSearch,
   getObjectDetails,
   updateUserGroups,
   updateGroupMembers,
@@ -76,6 +77,41 @@ router.get('/api/search', async (req, res) => {
       status: 'error',
       message: error.message,
       details: { query: req.query?.q || '', type: req.query?.type || 'all', ouDn: req.query?.ouDn || '' }
+    });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.get('/api/search/advanced', async (req, res) => {
+  const options = {
+    q: String(req.query.q || ''),
+    type: String(req.query.type || 'all'),
+    field: String(req.query.field || 'any'),
+    ouDn: String(req.query.ouDn || ''),
+    subtree: req.query.subtree !== '0',
+    status: String(req.query.status || ''),
+    logon: String(req.query.logon || ''),
+    days: Number(req.query.days || 0),
+    limit: Number(req.query.limit || 50)
+  };
+  try {
+    const result = await advancedSearch(options, adAuthFromRequest(req));
+    await audit(req, {
+      action: 'search',
+      status: 'success',
+      scopeType: options.type,
+      scopeDn: options.ouDn,
+      message: `Wyszukiwanie: "${options.q}"`,
+      details: { query: options.q, type: options.type, options, results: result.rows.length, truncated: result.truncated }
+    });
+    res.json(result);
+  } catch (error) {
+    await audit(req, {
+      action: 'search',
+      status: 'error',
+      scopeDn: options.ouDn,
+      message: error.message,
+      details: { query: options.q, type: options.type, options }
     });
     res.status(error.status || 500).json({ message: error.message });
   }

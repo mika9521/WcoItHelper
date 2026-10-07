@@ -2,8 +2,6 @@ const searchBtn = document.getElementById('searchBtn');
 const results = document.getElementById('results');
 const resultsCount = document.getElementById('resultsCount');
 const searchInput = document.getElementById('searchInput');
-const searchTextWrap = document.getElementById('searchTextWrap');
-const searchOuWrap = document.getElementById('searchOuWrap');
 const searchOuDn = document.getElementById('searchOuDn');
 const objectBody = document.getElementById('objectBody');
 const objectTitle = document.getElementById('objectTitle');
@@ -61,6 +59,9 @@ const state = {
   pendingChanges: null,
   ouTreeCache: new Map(),
   activeReportPage: 'stale-logons',
+  searchResults: [],
+  searchSort: { key: null, dir: 1 },
+  hasSearched: false,
   portalActivityPage: 1
 };
 
@@ -230,6 +231,42 @@ function formatAdDate(raw) {
   return s;
 }
 
+function fileTimeToDate(raw) {
+  const s = String(raw || '');
+  if (!/^\d+$/.test(s) || s === '0' || s === '9223372036854775807') return null;
+  const ms = Math.floor(Number(s) / 10000 - 11644473600000);
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms) : null;
+}
+
+// Most recent of lastLogonTimestamp (replicated, may lag ~14 days) and
+// lastLogon (exact, but only from the DC that answered the query).
+function getLastLogonDate(item) {
+  const dates = [fileTimeToDate(item.lastLogonTimestamp), fileTimeToDate(item.lastLogon)].filter(Boolean);
+  if (!dates.length) return null;
+  return new Date(Math.max(...dates.map((d) => d.getTime())));
+}
+
+function formatRelative(date) {
+  const days = Math.floor((Date.now() - date.getTime()) / 86400000);
+  if (days <= 0) return 'dziś';
+  if (days === 1) return 'wczoraj';
+  if (days < 30) return `${days} dni temu`;
+  const months = Math.floor(days / 30.44);
+  if (months < 12) return `${months} mies. temu`;
+  const years = Math.floor(days / 365.25);
+  return years === 1 ? 'ponad rok temu' : `${years} lat(a) temu`;
+}
+
+function lastLogonCellHtml(item) {
+  const type = detectType(item);
+  if (type !== 'user' && type !== 'computer') return '<span class="text-muted small">—</span>';
+  const date = getLastLogonDate(item);
+  if (!date) return '<span class="logon-cell logon-never">nigdy</span>';
+  const days = (Date.now() - date.getTime()) / 86400000;
+  const tone = days > 180 ? 'logon-stale' : days > 30 ? 'logon-old' : 'logon-recent';
+  return `<span class="logon-cell ${tone}" title="${escapeHtml(date.toLocaleString('pl-PL'))}"><span class="logon-date">${escapeHtml(date.toLocaleDateString('pl-PL'))}</span><span class="logon-rel">${escapeHtml(formatRelative(date))}</span></span>`;
+}
+
 function debounce(fn, wait) {
   let timer = null;
   return (...args) => {
@@ -297,6 +334,7 @@ function renderResultItem(item) {
       </button>
     </td>
     <td><div class="path-inline" title="${escapeHtml(dn || '')}">${dn ? dnToPathHtml(parentDn(dn), { skipDomain: true }) : '-'}</div></td>
+    <td>${lastLogonCellHtml(item)}</td>
     <td>${status ? `<span class="status-pill status-${status.key}">${escapeHtml(status.label)}</span>` : '<span class="text-muted small">—</span>'}</td>
     <td>
       <div class="d-flex gap-1 justify-content-end">
@@ -320,29 +358,81 @@ function getTypeFilter() {
 }
 
 function setResultsMessage(html) {
-  results.innerHTML = `<tr><td colspan="4"><div class="empty-state">${html}</div></td></tr>`;
+  results.innerHTML = `<tr><td colspan="5"><div class="empty-state">${html}</div></td></tr>`;
+}
+
+function getSearchOptions() {
+  return {
+    q: searchInput.value.trim(),
+    type: getTypeFilter(),
+    field: document.getElementById('searchField').value,
+    ouDn: searchOuDn.value,
+    subtree: document.getElementById('searchSubtree').checked ? '1' : '0',
+    status: document.getElementById('searchStatus').value,
+    logon: document.getElementById('searchLogon').value,
+    days: document.getElementById('searchDays').value,
+    limit: document.getElementById('searchLimit').value
+  };
+}
+
+function updateActiveFiltersBadge() {
+  const o = getSearchOptions();
+  const active = [o.ouDn, o.field !== 'any', o.subtree === '0', o.status, o.logon, o.limit !== '50'].filter(Boolean).length;
+  const badge = document.getElementById('activeFiltersCount');
+  badge.textContent = String(active);
+  badge.classList.toggle('d-none', !active);
+  document.getElementById('searchDaysWrap').classList.toggle('d-none', !['within', 'older'].includes(o.logon));
+}
+
+const SORTERS = {
+  name: (x) => getDisplayName(x).toLowerCase(),
+  path: (x) => dnToPathSegments(parentDn(x.dn || x.distinguishedName)).join('/').toLowerCase(),
+  logon: (x) => getLastLogonDate(x)?.getTime() ?? -1,
+  status: (x) => ({ active: 0, disabled: 1, blocked: 2 }[getStatus(x)?.key] ?? 3)
+};
+
+function renderSearchResults() {
+  const { key, dir } = state.searchSort;
+  const rows = [...state.searchResults];
+  if (key && SORTERS[key]) {
+    const get = SORTERS[key];
+    rows.sort((a, b) => {
+      const va = get(a);
+      const vb = get(b);
+      if (va < vb) return -dir;
+      if (va > vb) return dir;
+      return 0;
+    });
+  }
+  document.querySelectorAll('#resultsTable th.sortable').forEach((th) => {
+    th.classList.toggle('sorted-asc', th.dataset.sort === key && dir === 1);
+    th.classList.toggle('sorted-desc', th.dataset.sort === key && dir === -1);
+  });
+  results.innerHTML = '';
+  if (resultsCount) resultsCount.textContent = String(rows.length);
+  rows.forEach((row) => results.appendChild(renderResultItem(row)));
+  if (!rows.length) setResultsMessage(`${icon('search')}<div>Brak wyników dla podanych kryteriów.</div>`);
 }
 
 async function runSearch() {
+  const options = getSearchOptions();
+  if (!options.q && !options.ouDn && !options.status && !options.logon) {
+    showToast('Wpisz frazę lub ustaw filtr (np. OU), aby wyszukać', true);
+    searchInput.focus();
+    return;
+  }
+  const truncatedEl = document.getElementById('resultsTruncated');
   try {
-    const selectedType = getTypeFilter();
-    const type = selectedType === 'ou-selection' ? 'all' : selectedType;
-    const q = encodeURIComponent(searchInput?.value || '');
-    let url = `/api/search?q=${q}&type=${encodeURIComponent(type)}`;
-    if (selectedType === 'ou-selection') {
-      if (!searchOuDn.value) {
-        showToast('Najpierw wybierz OU do przeszukania', true);
-        return;
-      }
-      url = `/api/search?ouDn=${encodeURIComponent(searchOuDn.value)}&type=${encodeURIComponent(type)}`;
-    }
+    state.hasSearched = true;
     setResultsMessage('<span class="spinner-border spinner-border-sm text-primary"></span><div>Wyszukiwanie…</div>');
-    const data = await api(url);
-    results.innerHTML = '';
-    if (resultsCount) resultsCount.textContent = String(data.length);
-    data.forEach((row) => results.appendChild(renderResultItem(row)));
-    if (!data.length) setResultsMessage(`${icon('search')}<div>Brak wyników dla podanych kryteriów.</div>`);
+    const params = new URLSearchParams(options);
+    const data = await api(`/api/search/advanced?${params.toString()}`);
+    state.searchResults = data.rows || [];
+    truncatedEl.classList.toggle('d-none', !data.truncated);
+    truncatedEl.textContent = data.truncated ? `pokazano pierwsze ${data.limit}, zawęź wyszukiwanie lub zwiększ limit w filtrach` : '';
+    renderSearchResults();
   } catch (error) {
+    truncatedEl.classList.add('d-none');
     setResultsMessage(`<div class="text-danger">${escapeHtml(error.message)}</div>`);
     showToast(error.message, true);
   }
@@ -1485,7 +1575,7 @@ document.getElementById('confirmSoftDeleteBtn')?.addEventListener('click', async
     softDeleteConfirmModal.hide();
     softDeleteSuccessModal.show();
     showToast(failed.length ? `Konto zablokowane, ale ${failed.length} grup(y) nie usunięto` : 'Konto zablokowane i usunięte ze wszystkich grup', failed.length > 0);
-    await runSearch();
+    if (state.hasSearched) await runSearch();
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1505,7 +1595,7 @@ document.getElementById('confirmUnlockBtn')?.addEventListener('click', async () 
     });
     unlockAccountModal.hide();
     showToast('Konto odblokowane i przeniesione');
-    await runSearch();
+    if (state.hasSearched) await runSearch();
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1641,16 +1731,42 @@ document.getElementById('applyCopyGroupsBtn').addEventListener('click', async ()
 
 document.querySelectorAll('input[name="typeFilter"]').forEach((radio) => {
   radio.addEventListener('change', () => {
-    const isOuSelection = getTypeFilter() === 'ou-selection';
-    searchTextWrap?.classList.toggle('d-none', isOuSelection);
-    searchOuWrap?.classList.toggle('d-none', !isOuSelection);
-    if (!isOuSelection && searchInput.value.trim()) runSearch();
-    if (!isOuSelection) searchInput.focus();
+    if (state.hasSearched) runSearch();
+    searchInput.focus();
   });
 });
 
-searchOuDn?.addEventListener('change', () => {
-  if (searchOuDn.value) runSearch();
+document.getElementById('searchForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  runSearch();
+});
+
+['searchField', 'searchSubtree', 'searchStatus', 'searchLogon', 'searchDays', 'searchLimit'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', updateActiveFiltersBadge);
+});
+searchOuDn.addEventListener('change', updateActiveFiltersBadge);
+
+document.getElementById('clearSearchOuBtn').addEventListener('click', () => setOuFieldValue('searchOuDn', ''));
+
+document.getElementById('resetFiltersBtn').addEventListener('click', () => {
+  document.getElementById('searchField').value = 'any';
+  document.getElementById('searchSubtree').checked = true;
+  document.getElementById('searchStatus').value = '';
+  document.getElementById('searchLogon').value = '';
+  document.getElementById('searchDays').value = '90';
+  document.getElementById('searchLimit').value = '50';
+  setOuFieldValue('searchOuDn', '');
+});
+
+document.querySelectorAll('#resultsTable th.sortable').forEach((th) => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    const current = state.searchSort;
+    // name/path/status start ascending; last logon starts with most recent.
+    const firstDir = key === 'logon' ? -1 : 1;
+    state.searchSort = current.key === key ? { key, dir: -current.dir } : { key, dir: firstDir };
+    if (state.searchResults.length) renderSearchResults();
+  });
 });
 
 // Page header follows the active sidebar tab.
@@ -1669,13 +1785,6 @@ document.querySelectorAll('[data-goto-tab]').forEach((btn) => {
   });
 });
 
-searchBtn.addEventListener('click', runSearch);
-searchInput.addEventListener('keydown', (event) => {
-  if (event.key === 'Enter') {
-    event.preventDefault();
-    runSearch();
-  }
-});
 
 reportsList?.addEventListener('click', (event) => {
   const button = event.target.closest('.report-link');
@@ -1776,7 +1885,7 @@ applyObjectChangesBtn.addEventListener('click', async () => {
     await Promise.all(operations);
     objectModal.hide();
     showToast('Zmiany zostały zastosowane');
-    await runSearch();
+    if (state.hasSearched) await runSearch();
   } catch (error) {
     showToast(error.message, true);
   }

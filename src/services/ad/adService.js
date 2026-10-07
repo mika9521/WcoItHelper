@@ -83,13 +83,14 @@ async function searchObjects(query, type, authContext = null) {
   };
 
   const typeFilter = filters[type] || filters.all;
-  const term = escapeFilter(query);
+  const pattern = toLdapPattern(query);
+  const termFilter = pattern ? `(|(cn=${pattern})(sAMAccountName=${pattern})(displayName=${pattern}))` : '';
 
   return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(env.ad.baseDn, {
       scope: 'sub',
       sizeLimit: 50,
-      filter: `(&${typeFilter}(|(cn=*${term}*)(sAMAccountName=*${term}*)(displayName=*${term}*)))`,
+      filter: `(&${typeFilter}${termFilter})`,
       attributes: DEFAULT_ATTRS
     });
 
@@ -115,6 +116,82 @@ async function searchObjectsInOu(ouDn, type = 'all', authContext = null) {
       attributes: DEFAULT_ATTRS
     });
     return searchEntries.map(normalizeObject);
+  });
+}
+
+const SEARCH_FIELDS = {
+  any: ['cn', 'sAMAccountName', 'displayName', 'givenName', 'sn', 'mail'],
+  sAMAccountName: ['sAMAccountName'],
+  displayName: ['displayName', 'cn'],
+  givenName: ['givenName'],
+  sn: ['sn'],
+  mail: ['mail', 'userPrincipalName'],
+  description: ['description'],
+  department: ['department'],
+  title: ['title']
+};
+
+const SEARCH_TYPE_FILTERS = {
+  // Computer accounts also carry objectClass=user, hence objectCategory.
+  user: '(&(objectCategory=person)(objectClass=user))',
+  computer: '(objectClass=computer)',
+  group: '(objectClass=group)',
+  all: '(|(objectClass=user)(objectClass=computer)(objectClass=group))'
+};
+
+const SEARCH_LIMITS = [50, 100, 250, 500];
+
+// SQL-LIKE style pattern -> LDAP substring value. "%" (or "*") is the
+// wildcard; without one the term is matched anywhere ("contains"), so
+// "kow" == "%kow%", "kow%" = starts with, "%ski" = ends with.
+function toLdapPattern(term) {
+  const raw = String(term || '').trim();
+  if (!raw) return '';
+  if (!/[%*]/.test(raw)) return `*${escapeFilter(raw)}*`;
+  const pattern = raw
+    .split(/[%*]/)
+    .map((part) => escapeFilter(part))
+    .join('*')
+    .replace(/\*{2,}/g, '*');
+  return pattern === '*' ? '' : pattern;
+}
+
+function daysAgoFileTime(days) {
+  return String((Date.now() - days * 86400000 + 11644473600000) * 10000);
+}
+
+async function advancedSearch(options = {}, authContext = null) {
+  const type = SEARCH_TYPE_FILTERS[options.type] ? options.type : 'all';
+  const fields = SEARCH_FIELDS[options.field] || SEARCH_FIELDS.any;
+  const pattern = toLdapPattern(options.q);
+  const limit = SEARCH_LIMITS.includes(Number(options.limit)) ? Number(options.limit) : 50;
+  const baseDn = options.ouDn || env.ad.baseDn;
+  const scope = options.subtree === false ? 'one' : 'sub';
+  const days = Math.max(1, Math.min(Number(options.days) || 90, 36500));
+
+  const parts = [SEARCH_TYPE_FILTERS[type]];
+  if (pattern) {
+    parts.push(`(|${fields.map((attr) => `(${attr}=${pattern})`).join('')})`);
+  }
+  if (options.status === 'enabled') parts.push('(!(userAccountControl:1.2.840.113556.1.4.803:=2))');
+  if (options.status === 'disabled') parts.push('(userAccountControl:1.2.840.113556.1.4.803:=2)');
+  // lastLogonTimestamp is replicated to every DC (with up to ~14 days lag),
+  // which makes it the attribute AD itself recommends for stale-account queries.
+  if (options.logon === 'older') parts.push(`(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<=${daysAgoFileTime(days)}))`);
+  if (options.logon === 'within') parts.push(`(lastLogonTimestamp>=${daysAgoFileTime(days)})`);
+  if (options.logon === 'never') parts.push('(!(lastLogonTimestamp=*))');
+
+  const filter = `(&${parts.join('')})`;
+
+  return withAdaptiveBind(authContext, async (client) => {
+    const { searchEntries } = await client.search(baseDn, {
+      scope,
+      sizeLimit: limit + 1,
+      filter,
+      attributes: DEFAULT_ATTRS
+    });
+    const rows = searchEntries.slice(0, limit).map(normalizeObject);
+    return { rows, truncated: searchEntries.length > limit, limit, filter };
   });
 }
 
@@ -664,6 +741,7 @@ module.exports = {
   authenticate,
   searchObjects,
   searchObjectsInOu,
+  advancedSearch,
   getObjectDetails,
   updateUserGroups,
   updateGroupMembers,

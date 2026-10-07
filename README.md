@@ -4,7 +4,7 @@ Modularny portal do zarządzania AD pod środowisko szpitalne:
 
 - logowanie po poświadczeniach AD,
 - autoryzacja po konkretnych użytkownikach lub grupie AD,
-- wyszukiwarka obiektów (użytkownicy/komputery/grupy),
+- wyszukiwarka obiektów (użytkownicy/komputery/grupy) z filtrami: OU (z podjednostkami lub bez), pole, status konta, ostatnie logowanie, limit; wzorce `%` jak w SQL LIKE (`kow%`, `%ski`); kolumna ostatniego logowania i sortowanie,
 - osobne modale dla różnych typów obiektów,
 - zarządzanie `memberOf` (dodawanie grup, kopiowanie zaznaczonych grup od użytkownika referencyjnego),
 - zarządzanie członkami grupy (dodawanie/usuwanie kont bezpośrednio z poziomu obiektu grupy),

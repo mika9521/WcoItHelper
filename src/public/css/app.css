@@ -854,3 +854,19 @@ pre.json-view {
 .cert-summary { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; font-size: 0.85rem; margin-bottom: 1rem; }
 .cert-summary dt { color: var(--ink-500); font-weight: 500; }
 .cert-summary dd { margin: 0; word-break: break-all; }
+
+/* ----- Filtry wyszukiwania i kolumna ostatniego logowania ----- */
+.search-filters { border-top: 1px solid var(--border); margin-top: 1rem; padding-top: 1rem; }
+.search-days { width: 130px; flex: 0 0 auto; }
+#resultsTable th.sortable { cursor: pointer; user-select: none; }
+#resultsTable th.sortable:hover { color: var(--ink-900); }
+#resultsTable th.sortable::after { content: ""; display: inline-block; margin-left: 0.35rem; border: 4px solid transparent; vertical-align: middle; opacity: 0.35; border-top-color: currentColor; transform: translateY(2px); }
+#resultsTable th.sorted-asc::after { opacity: 1; border-top-color: transparent; border-bottom-color: currentColor; transform: translateY(-2px); }
+#resultsTable th.sorted-desc::after { opacity: 1; }
+#resultsTable th.sorted-asc, #resultsTable th.sorted-desc { color: var(--accent); }
+.logon-cell { display: flex; flex-direction: column; line-height: 1.25; }
+.logon-date { font-size: 0.82rem; font-variant-numeric: tabular-nums; color: var(--ink-900); }
+.logon-rel { font-size: 0.74rem; color: var(--ink-500); }
+.logon-old .logon-rel { color: var(--warning); }
+.logon-stale .logon-rel { color: var(--danger); }
+.logon-never { font-size: 0.8rem; color: var(--ink-400); font-style: italic; }
