@@ -36,6 +36,10 @@ const {
   deleteShare,
   resolveShareAccess
 } = require('../services/permissions/permissionService');
+const { getSettings, updateSettings } = require('../services/permissions/settingsService');
+const { ACCOUNT_TYPE_IDS } = require('../services/permissions/accountTypes');
+
+const VIEW_ACTIONS = ['object_view', 'user_certificates_view', 'bitlocker_keys_view'];
 const {
   logEvent,
   readEvents,
@@ -544,17 +548,29 @@ router.post('/api/user/create', async (req, res) => {
   try {
     // Permissions are resolved to groups here (not trusted from the client),
     // then merged with any additional groups picked in the wizard.
-    const permissions = await getPermissionsByIds(req.body?.permissionIds);
-    const shareAccess = await resolveShareAccess(req.body?.shareAccess);
+    const accountType = String(req.body?.userType || 'eskulap-domain');
+    if (!ACCOUNT_TYPE_IDS.includes(accountType)) throw Object.assign(new Error('Nieznany typ konta'), { status: 400 });
+    const body = { ...req.body, accountType };
+    if (accountType === 'service') {
+      // Service accounts: login svc_<name>, always in the OU from Settings.
+      const login = String(body.login || '').trim();
+      if (!/^svc_[A-Za-z0-9._-]+$/.test(login)) throw Object.assign(new Error('Login konta serwisowego musi mieć postać svc_nazwa (litery, cyfry, . _ -)'), { status: 400 });
+      const { serviceAccountOuDn } = await getSettings();
+      if (!serviceAccountOuDn) throw Object.assign(new Error('W Ustawieniach nie wskazano OU dla kont serwisowych'), { status: 400 });
+      body.ouDn = serviceAccountOuDn;
+    }
+    const permissions = await getPermissionsByIds(body.permissionIds, accountType);
+    const shareAccess = await resolveShareAccess(body.shareAccess, accountType);
     const groupMap = new Map();
     permissions.forEach((p) => p.groups.forEach((g) => groupMap.set(g.dn.toLowerCase(), g.dn)));
     shareAccess.forEach(({ group }) => groupMap.set(group.dn.toLowerCase(), group.dn));
-    (Array.isArray(req.body?.groups) ? req.body.groups : []).forEach((dn) => {
+    (Array.isArray(body.groups) ? body.groups : []).forEach((dn) => {
       if (dn) groupMap.set(String(dn).toLowerCase(), String(dn));
     });
     // A read-write share never comes with its read-only group as well.
-    shareAccess.filter((a) => a.level === 'rw').forEach(({ share }) => groupMap.delete(share.readGroup.dn.toLowerCase()));
-    const result = await createUser({ ...req.body, groups: [...groupMap.values()] }, adAuthFromRequest(req));
+    shareAccess.filter((a) => a.level === 'rw' && a.share.readGroup?.dn)
+      .forEach(({ share }) => groupMap.delete(share.readGroup.dn.toLowerCase()));
+    const result = await createUser({ ...body, groups: [...groupMap.values()] }, adAuthFromRequest(req));
     await audit(req, {
       action: 'user_create',
       status: result.failedGroups?.length ? 'error' : 'success',
@@ -565,7 +581,7 @@ router.post('/api/user/create', async (req, res) => {
         : 'Utworzenie użytkownika',
       details: {
         login: req.body?.login || '',
-        userType: req.body?.userType || '',
+        userType: accountType,
         referenceUserDn: req.body?.referenceUserDn || '',
         permissions: permissions.map((p) => ({ id: p.id, name: p.name })),
         shares: shareAccess.map(({ share, level, group }) => ({ id: share.id, name: share.name, path: share.path, level, groupDn: group.dn })),
@@ -629,6 +645,25 @@ function registerCrudRoutes(basePath, auditPrefix, label, store) {
   });
 }
 
+router.get('/api/settings', async (req, res) => {
+  try {
+    res.json(await getSettings());
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.put('/api/settings', async (req, res) => {
+  try {
+    const { before, after } = await updateSettings(req.body, req.session?.user?.login || '');
+    await audit(req, { action: 'settings_update', status: 'success', message: 'Zmiana ustawień portalu', details: { before, after } });
+    res.json(after);
+  } catch (error) {
+    await audit(req, { action: 'settings_update', status: 'error', message: error.message });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
 registerCrudRoutes('/api/permissions', 'permission', 'uprawnienie', {
   list: listPermissions, create: createPermission, update: updatePermission, remove: deletePermission
 });
@@ -668,8 +703,8 @@ router.get('/api/audit/object-logs', async (req, res) => {
   try {
     const dn = String(req.query.dn || '');
     const limit = Math.min(Number(req.query.limit || 200), 1000);
-    const rows = await getObjectEvents(dn, limit);
-    res.json(rows);
+    const hideViews = req.query.hideViews !== '0';
+    res.json(await getObjectEvents(dn, limit, { excludeActions: hideViews ? VIEW_ACTIONS : [] }));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

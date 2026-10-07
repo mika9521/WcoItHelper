@@ -3,6 +3,7 @@
 // (-r) and a read-write (-rw) AD group. Both are used by the new-user wizard.
 const { AppError } = require('../../utils/errors');
 const { createJsonStore, cleanGroup } = require('./jsonStore');
+const { sanitizeAllowedTypes, isAllowedFor } = require('./accountTypes');
 
 const byCategoryThenName = (list) => list.sort((a, b) => (a.category || '').localeCompare(b.category || '', 'pl') || a.name.localeCompare(b.name, 'pl'));
 
@@ -29,6 +30,7 @@ function sanitizePermission(input = {}) {
     name,
     description: String(input.description || '').trim().slice(0, 1000),
     category: String(input.category || '').trim().slice(0, 80),
+    allowedTypes: sanitizeAllowedTypes(input.allowedTypes),
     groups
   };
 }
@@ -37,19 +39,20 @@ function sanitizeShare(input = {}) {
   const name = requireName(input);
   const sharePath = String(input.path || '').trim();
   if (!sharePath) throw new AppError('Ścieżka udziału jest wymagana (np. \\\\serwer\\udzial)', 400);
+  // A share may have only one of the groups (e.g. read-write only).
   const readGroup = cleanGroup(input.readGroup);
   const writeGroup = cleanGroup(input.writeGroup);
-  if (!readGroup.dn) throw new AppError('Wybierz grupę tylko do odczytu (-r)', 400);
-  if (!writeGroup.dn) throw new AppError('Wybierz grupę do odczytu i zapisu (-rw)', 400);
-  if (readGroup.dn.toLowerCase() === writeGroup.dn.toLowerCase()) {
+  if (!readGroup.dn && !writeGroup.dn) throw new AppError('Wybierz co najmniej jedną grupę: -r lub -rw', 400);
+  if (readGroup.dn && writeGroup.dn && readGroup.dn.toLowerCase() === writeGroup.dn.toLowerCase()) {
     throw new AppError('Grupa odczytu i grupa odczytu/zapisu muszą być różne', 400);
   }
   return {
     name,
     description: String(input.description || '').trim().slice(0, 1000),
     path: sharePath.slice(0, 400),
-    readGroup,
-    writeGroup
+    allowedTypes: sanitizeAllowedTypes(input.allowedTypes),
+    readGroup: readGroup.dn ? readGroup : null,
+    writeGroup: writeGroup.dn ? writeGroup : null
   };
 }
 
@@ -71,14 +74,24 @@ const shares = createJsonStore({
 
 // [{ id, level: 'r' | 'rw' }] -> one group per share. Read-write grants only
 // the -rw group (never both), read-only only the -r group.
-async function resolveShareAccess(access = []) {
+async function resolveShareAccess(access = [], accountType = '') {
   const list = (Array.isArray(access) ? access : []).filter((a) => a && (a.level === 'r' || a.level === 'rw'));
   const byId = new Map(list.map((a) => [String(a.id), a.level]));
   const found = await shares.getByIds([...byId.keys()]);
   return found.map((share) => {
     const level = byId.get(share.id);
-    return { share, level, group: level === 'rw' ? share.writeGroup : share.readGroup };
+    const group = level === 'rw' ? share.writeGroup : share.readGroup;
+    if (!group?.dn) throw new AppError(`Udział „${share.name}” nie ma grupy ${level === 'rw' ? '-rw (odczyt i zapis)' : '-r (tylko odczyt)'}`, 400);
+    if (accountType && !isAllowedFor(share, accountType)) throw new AppError(`Udział „${share.name}” nie jest dostępny dla tego typu konta`, 400);
+    return { share, level, group };
   });
+}
+
+async function getPermissionsForType(ids = [], accountType = '') {
+  const found = await permissions.getByIds(ids);
+  const blocked = found.filter((p) => accountType && !isAllowedFor(p, accountType));
+  if (blocked.length) throw new AppError(`Uprawnienia niedostępne dla tego typu konta: ${blocked.map((p) => p.name).join(', ')}`, 400);
+  return found;
 }
 
 module.exports = {
@@ -86,7 +99,7 @@ module.exports = {
   createPermission: permissions.create,
   updatePermission: permissions.update,
   deletePermission: permissions.remove,
-  getPermissionsByIds: permissions.getByIds,
+  getPermissionsByIds: getPermissionsForType,
   listShares: shares.list,
   createShare: shares.create,
   updateShare: shares.update,
