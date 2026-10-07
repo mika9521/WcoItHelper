@@ -20,7 +20,7 @@ const {
   isSamAccountNameTaken,
   suggestLogin,
   getUserCertificates,
-  revokeUserCertificate
+  deleteUserCertificate
 } = require('../services/ad/adService');
 const { staleLogons } = require('../services/reports/reportService');
 const {
@@ -238,9 +238,17 @@ router.post('/api/object/soft-delete', async (req, res) => {
     const result = await softDeleteAccount(objectDn, adAuthFromRequest(req));
     await audit(req, {
       action: 'account_soft_delete',
-      status: 'success',
+      status: result.failedGroups.length ? 'error' : 'success',
       scopeDn: objectDn,
-      message: 'Soft delete konta (wyłączenie + przeniesienie)'
+      targetDn: result.newDn,
+      message: result.failedGroups.length
+        ? `Soft delete konta: wyłączono i przeniesiono, ale nie usunięto z ${result.failedGroups.length} grup(y)`
+        : 'Soft delete konta (wyłączenie, usunięcie z grup, przeniesienie)',
+      details: {
+        groupsBefore: result.groupsBefore,
+        removedGroups: result.removedGroups,
+        failedGroups: result.failedGroups
+      }
     });
     res.json(result);
   } catch (error) {
@@ -384,25 +392,34 @@ router.get('/api/user/certificates', async (req, res) => {
   }
 });
 
-router.post('/api/user/certificates/revoke', async (req, res) => {
+router.post('/api/user/certificates/delete', async (req, res) => {
   try {
-    const { userDn, certificateBase64, subjectCn } = req.body;
-    await revokeUserCertificate(userDn, certificateBase64, adAuthFromRequest(req));
+    const { userDn, fingerprint256 } = req.body;
+    const result = await deleteUserCertificate(userDn, fingerprint256, adAuthFromRequest(req));
+    const cert = result.certificate || {};
     await audit(req, {
-      action: 'user_certificate_revoke',
+      action: 'user_certificate_delete',
       status: 'success',
       scopeType: 'user',
       scopeDn: userDn,
-      message: 'Odwołanie certyfikatu użytkownika',
-      details: { subjectCn: subjectCn || '' }
+      message: 'Usunięcie certyfikatu z konta użytkownika',
+      details: {
+        subject: cert.subject || '',
+        issuer: cert.issuer || '',
+        serialNumber: cert.serialNumber || '',
+        thumbprint: cert.thumbprint || '',
+        validTo: cert.validTo || ''
+      }
     });
-    res.json({ updated: true });
+    res.json({ deleted: true });
   } catch (error) {
     await audit(req, {
-      action: 'user_certificate_revoke',
+      action: 'user_certificate_delete',
       status: 'error',
+      scopeType: 'user',
       scopeDn: req.body?.userDn || '',
-      message: error.message
+      message: error.message,
+      details: { fingerprint256: req.body?.fingerprint256 || '' }
     });
     res.status(error.status || 500).json({ message: error.message });
   }

@@ -37,11 +37,14 @@
       <div class="modal-body">
         <div class="dn-box mb-3" id="softDeleteTargetDn">-</div>
         <p class="mb-2">Po potwierdzeniu konto zostanie:</p>
-        <ul class="mb-2">
+        <ol class="mb-3">
           <li>wyłączone,</li>
+          <li>usunięte ze wszystkich grup,</li>
           <li>przeniesione do OU <code>zablokowane_konta</code>.</li>
-        </ul>
-        <div class="small text-muted">Operację można cofnąć przyciskiem <strong>Odblokuj</strong> w wynikach wyszukiwania.</div>
+        </ol>
+        <div class="form-section-title mb-2">Grupy do usunięcia <span class="badge rounded-pill text-bg-light border ms-1" id="softDeleteGroupsCount">0</span></div>
+        <div class="soft-delete-groups mb-3" id="softDeleteGroupsList"></div>
+        <div class="small text-muted">Lista grup zostanie zapisana w logach obiektu. Przycisk <strong>Odblokuj</strong> włącza konto i przenosi je z powrotem, ale grup nie przywraca.</div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
@@ -61,7 +64,7 @@
         </div>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" id="softDeleteSuccessBody">
         Konto zostało wyłączone i przeniesione do OU <code>zablokowane_konta</code>.
       </div>
       <div class="modal-footer">
@@ -99,6 +102,34 @@
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
         <button type="button" class="btn btn-success" id="confirmUnlockBtn">Odblokuj konto</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="certDeleteModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon modal-title-icon-danger"><svg class="icon"><use href="#i-key"/></svg></span>
+          <div>
+            <h5 class="modal-title">Usuń certyfikat</h5>
+            <div class="modal-subtitle">Usunięcie z atrybutu userCertificate konta</div>
+          </div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <dl class="cert-summary" id="certDeleteSummary"></dl>
+        <div class="alert alert-warning small mb-0">
+          Certyfikat zostanie usunięty z konta w AD, więc logowanie nim kartą inteligentną przestanie działać.
+          Nie jest to odwołanie w urzędzie certyfikacji (CA). Jeśli certyfikat ma trafić na listę CRL, odwołaj go także w konsoli CA.
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+        <button type="button" class="btn btn-danger" id="confirmCertDeleteBtn">Usuń certyfikat</button>
       </div>
     </div>
   </div>

@@ -40,6 +40,7 @@ const ouPickerModal = new bootstrap.Modal(document.getElementById('ouPickerModal
 const softDeleteConfirmModal = new bootstrap.Modal(document.getElementById('softDeleteConfirmModal'));
 const softDeleteSuccessModal = new bootstrap.Modal(document.getElementById('softDeleteSuccessModal'));
 const unlockAccountModal = new bootstrap.Modal(document.getElementById('unlockAccountModal'));
+const certDeleteModal = new bootstrap.Modal(document.getElementById('certDeleteModal'));
 const applyObjectChangesBtn = document.getElementById('applyObjectChangesBtn');
 
 const state = {
@@ -53,6 +54,8 @@ const state = {
   newUser: { referenceDn: null, groups: new Set(), loginTouched: false },
   softDeleteTargetDn: null,
   unlockTargetDn: null,
+  certificates: [],
+  certDelete: null,
   bitlockerKeys: [],
   currentObjectDn: null,
   pendingChanges: null,
@@ -526,8 +529,11 @@ function userDataTemplate(data) {
 
 function certificatesTemplate(dn) {
   return `
-    <div class="small text-muted mb-2">Certyfikaty kart inteligentnych (smart card) przypisane do konta w AD.</div>
-    <div class="user-certificates-list" data-dn="${escapeHtml(dn || '')}">Ładowanie certyfikatów…</div>
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="small text-muted">Certyfikaty zapisane na koncie w AD (atrybut <code>userCertificate</code>), np. certyfikaty kart inteligentnych.</div>
+      <button type="button" class="btn btn-sm btn-outline-secondary" id="reloadCertificatesBtn">${icon('refresh')} Odśwież</button>
+    </div>
+    <div class="user-certificates-list" data-dn="${escapeHtml(dn || '')}"><div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Ładowanie certyfikatów…</div></div>
   `;
 }
 
@@ -639,6 +645,16 @@ function formatAuditDetails(event) {
     rows.push(`<div class="mt-1">Nowy stan konta: <strong>${details.enabled ? 'włączone' : 'wyłączone'}</strong></div>`);
   } else if (action === 'account_unlock') {
     rows.push('<div class="mt-1">Konto odblokowane (włączone)' + (event.targetDn ? ` i przeniesione do <code class="small">${escapeHtml(event.targetDn)}</code>` : '') + '</div>');
+  } else if (action === 'account_soft_delete') {
+    if (event.targetDn) rows.push(`<div class="mt-1">Wyłączono i przeniesiono do: <code class="small">${escapeHtml(event.targetDn)}</code></div>`);
+    if (details.groupsBefore) {
+      rows.push(`<div class="mt-1"><span class="fw-semibold">Grupy przed usunięciem (${details.groupsBefore.length}):</span>${formatDnList(details.groupsBefore)}</div>`);
+    }
+    if ((details.failedGroups || []).length) {
+      rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">Nie udało się usunąć z:</span>${formatDnList(details.failedGroups.map((f) => f.groupDn))}</div>`);
+    }
+  } else if (action === 'user_certificate_delete') {
+    rows.push(`<div class="mt-1"><span class="fw-semibold">Certyfikat:</span> ${escapeHtml(details.subject || details.subjectCn || '-')}${details.thumbprint ? ` · odcisk <code class="small">${escapeHtml(details.thumbprint)}</code>` : ''}${details.serialNumber ? ` · nr <code class="small">${escapeHtml(details.serialNumber)}</code>` : ''}</div>`);
   } else if (action === 'object_move') {
     if (event.targetDn) rows.push(`<div class="mt-1">Przeniesiono do: <code class="small">${escapeHtml(event.targetDn)}</code></div>`);
   } else if (action === 'user_settings_update') {
@@ -791,55 +807,94 @@ async function loadBitlockerKeys(dn) {
   }
 }
 
+function formatCertDate(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleDateString('pl-PL');
+}
+
+function certStatusHtml(cert) {
+  if (cert.parseError) return '<span class="status-pill status-disabled">Nieczytelny</span>';
+  if (cert.expired) return '<span class="status-pill status-blocked">Wygasł</span>';
+  if (cert.notYetValid) return '<span class="status-pill status-disabled">Jeszcze nieważny</span>';
+  return '<span class="status-pill status-active">Ważny</span>';
+}
+
 async function loadUserCertificates(dn) {
   const holder = document.querySelector('.user-certificates-list');
   if (!holder || !dn) return;
   try {
     const rows = await api(`/api/user/certificates?dn=${encodeURIComponent(dn)}`);
+    state.certificates = rows;
     holder.innerHTML = rows.length
       ? `
-        <div class="table-responsive">
-          <table class="table table-sm table-striped align-middle mb-0">
+        <div class="table-responsive report-table-wrap">
+          <table class="table table-sm table-hover align-middle mb-0">
             <thead>
-              <tr><th>Podmiot</th><th>Wydawca</th><th>Ważny od</th><th>Ważny do</th><th>Numer seryjny</th><th></th></tr>
+              <tr><th>Wystawiony dla</th><th>Wystawca</th><th>Ważność</th><th>Status</th><th>Odcisk palca (SHA-1)</th><th></th></tr>
             </thead>
             <tbody>
-              ${rows.map((row) => `
+              ${rows.map((row, idx) => `
                 <tr>
-                  <td class="small text-break">${escapeHtml(row.subjectCn || row.subject || '-')}</td>
+                  <td class="small text-break"><span class="fw-semibold">${escapeHtml(row.subjectCn || row.subject || '-')}</span>${row.subjectAltName ? `<div class="text-muted">${escapeHtml(row.subjectAltName)}</div>` : ''}</td>
                   <td class="small text-break">${escapeHtml(row.issuerCn || row.issuer || '-')}</td>
-                  <td class="small">${escapeHtml(formatAdDate(row.validFrom))}</td>
-                  <td class="small">${escapeHtml(formatAdDate(row.validTo))}</td>
-                  <td class="font-monospace small text-break">${escapeHtml(row.serialNumber || '-')}</td>
-                  <td><button type="button" class="btn btn-sm btn-outline-danger revoke-certificate-btn" data-raw="${escapeHtml(row.raw)}" data-subject="${escapeHtml(row.subjectCn || row.subject || '')}">Odwołaj certyfikat</button></td>
+                  <td class="small text-nowrap">${escapeHtml(formatCertDate(row.validFrom))} – ${escapeHtml(formatCertDate(row.validTo))}</td>
+                  <td>${certStatusHtml(row)}</td>
+                  <td class="font-monospace small text-break">${escapeHtml(row.thumbprint || '-')}</td>
+                  <td class="text-end"><button type="button" class="btn-icon btn-icon-danger delete-certificate-btn" data-index="${idx}" title="Usuń certyfikat" aria-label="Usuń certyfikat">${icon('x')}</button></td>
                 </tr>
               `).join('')}
             </tbody>
           </table>
         </div>
       `
-      : '<div class="text-muted small">Brak certyfikatów przypisanych do tego konta.</div>';
+      : `<div class="empty-state">${icon('key')}<div>Brak certyfikatów przypisanych do tego konta.</div></div>`;
 
-    holder.querySelectorAll('.revoke-certificate-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const subject = btn.dataset.subject || 'ten certyfikat';
-        if (!window.confirm(`Odwołać certyfikat "${subject}"? Użytkownik nie będzie mógł się nim zalogować kartą inteligentną.`)) return;
-        try {
-          await api('/api/user/certificates/revoke', {
-            method: 'POST',
-            body: JSON.stringify({ userDn: dn, certificateBase64: btn.dataset.raw, subjectCn: subject })
-          });
-          showToast('Certyfikat odwołany');
-          await loadUserCertificates(dn);
-        } catch (error) {
-          showToast(error.message, true);
-        }
-      });
+    holder.querySelectorAll('.delete-certificate-btn').forEach((btn) => {
+      btn.addEventListener('click', () => openCertDeleteModal(dn, state.certificates[Number(btn.dataset.index)]));
     });
   } catch (error) {
     holder.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
   }
 }
+
+function openCertDeleteModal(userDn, cert) {
+  if (!cert) return;
+  state.certDelete = { userDn, cert };
+  const rows = [
+    ['Wystawiony dla', cert.subjectCn || cert.subject],
+    ['Wystawca', cert.issuerCn || cert.issuer],
+    ['Ważny do', formatCertDate(cert.validTo)],
+    ['Numer seryjny', cert.serialNumber],
+    ['Odcisk palca', cert.thumbprint]
+  ];
+  document.getElementById('certDeleteSummary').innerHTML = rows
+    .map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd class="${k === 'Odcisk palca' || k === 'Numer seryjny' ? 'font-monospace' : ''}">${escapeHtml(v || '-')}</dd>`)
+    .join('');
+  certDeleteModal.show();
+}
+
+document.getElementById('confirmCertDeleteBtn').addEventListener('click', async () => {
+  const pending = state.certDelete;
+  if (!pending) return;
+  const btn = document.getElementById('confirmCertDeleteBtn');
+  try {
+    btn.disabled = true;
+    await api('/api/user/certificates/delete', {
+      method: 'POST',
+      body: JSON.stringify({ userDn: pending.userDn, fingerprint256: pending.cert.fingerprint256 })
+    });
+    certDeleteModal.hide();
+    showToast('Certyfikat usunięty z konta');
+    await loadUserCertificates(pending.userDn);
+    await loadObjectAuditLogs(pending.userDn);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    btn.disabled = false;
+    state.certDelete = null;
+  }
+});
 
 async function loadGlobalAuditWidgets() {
   try {
@@ -996,7 +1051,25 @@ function openSoftDeleteModal(item) {
   state.softDeleteTargetDn = dn;
   const target = document.getElementById('softDeleteTargetDn');
   if (target) target.textContent = dn;
+  const list = document.getElementById('softDeleteGroupsList');
+  const count = document.getElementById('softDeleteGroupsCount');
+  count.textContent = '…';
+  list.innerHTML = '<div class="lookup-empty py-2"><span class="spinner-border spinner-border-sm text-primary"></span> Pobieranie grup…</div>';
   softDeleteConfirmModal.show();
+  api(`/api/object?dn=${encodeURIComponent(dn)}`)
+    .then((data) => {
+      if (state.softDeleteTargetDn !== dn) return;
+      const groups = toArray(data.memberOf).map(String);
+      count.textContent = String(groups.length);
+      list.innerHTML = groups.length
+        ? groups.map((g) => `<div class="member-of-line"><span class="group-badge" title="${escapeHtml(g)}">${dnChipContent(g)}</span></div>`).join('')
+        : '<div class="chip-empty">Konto nie należy do żadnej grupy (poza grupą podstawową).</div>';
+    })
+    .catch((error) => {
+      if (state.softDeleteTargetDn !== dn) return;
+      count.textContent = '?';
+      list.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
+    });
 }
 
 function openUnlockModal(item) {
@@ -1079,6 +1152,12 @@ function bindModalActions() {
       await copyTextToClipboard(text);
       showToast('Skopiowano wszystkie klucze do schowka');
     });
+  }
+
+  const reloadCertificatesBtn = document.getElementById('reloadCertificatesBtn');
+  if (reloadCertificatesBtn && !reloadCertificatesBtn.dataset.bound) {
+    reloadCertificatesBtn.dataset.bound = '1';
+    reloadCertificatesBtn.addEventListener('click', () => loadUserCertificates(state.currentObjectDn));
   }
 
   const exportBitlockerPdfBtn = document.getElementById('exportBitlockerPdfBtn');
@@ -1392,13 +1471,20 @@ confirmOuBtn.addEventListener('click', confirmOuSelection);
 document.getElementById('confirmSoftDeleteBtn')?.addEventListener('click', async () => {
   if (!state.softDeleteTargetDn) return;
   try {
-    await api('/api/object/soft-delete', {
+    const result = await api('/api/object/soft-delete', {
       method: 'POST',
       body: JSON.stringify({ objectDn: state.softDeleteTargetDn })
     });
+    const removed = result.removedGroups || [];
+    const failed = result.failedGroups || [];
+    document.getElementById('softDeleteSuccessBody').innerHTML = `
+      <p class="mb-2">Konto zostało wyłączone i przeniesione do OU <code>zablokowane_konta</code>.</p>
+      <p class="mb-0">Usunięto z <strong>${removed.length}</strong> z ${(result.groupsBefore || []).length} grup. Lista grup sprzed usunięcia jest zapisana w logach obiektu.</p>
+      ${failed.length ? `<div class="alert alert-danger small mt-3 mb-0"><strong>Nie udało się usunąć z ${failed.length} grup(y):</strong>${formatDnList(failed.map((f) => f.groupDn))}</div>` : ''}
+    `;
     softDeleteConfirmModal.hide();
     softDeleteSuccessModal.show();
-    showToast('Konto zablokowane i przeniesione do OU zablokowane_konta');
+    showToast(failed.length ? `Konto zablokowane, ale ${failed.length} grup(y) nie usunięto` : 'Konto zablokowane i usunięte ze wszystkich grup', failed.length > 0);
     await runSearch();
   } catch (error) {
     showToast(error.message, true);
@@ -2028,7 +2114,13 @@ document.addEventListener('show.bs.modal', (event) => {
 });
 document.addEventListener('hidden.bs.modal', (event) => {
   event.target.style.zIndex = '';
-  if (document.querySelector('.modal.show')) document.body.classList.add('modal-open');
+  const stillOpen = Array.from(document.querySelectorAll('.modal.show'));
+  if (stillOpen.length) {
+    document.body.classList.add('modal-open');
+    // Return focus to the modal underneath so Escape / Tab keep working there.
+    const top = stillOpen.sort((x, y) => Number(y.style.zIndex || 1055) - Number(x.style.zIndex || 1055))[0];
+    if (!top.contains(document.activeElement)) top.focus();
+  }
 });
 
 document.querySelectorAll('[data-bs-toggle="popover"]').forEach((el) => {

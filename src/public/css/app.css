@@ -849,3 +849,8 @@ pre.json-view {
   padding: 12px;
   max-height: 400px;
 }
+
+.soft-delete-groups { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+.cert-summary { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; font-size: 0.85rem; margin-bottom: 1rem; }
+.cert-summary dt { color: var(--ink-500); font-weight: 500; }
+.cert-summary dd { margin: 0; word-break: break-all; }

@@ -12,6 +12,8 @@ Modularny portal do zarządzania AD pod środowisko szpitalne:
 - kreator nowego użytkownika (opcjonalnie na wzór istniejącego konta: kopiuje OU i grupy; login generowany automatycznie w formacie `nazwisko.i`, edytowalny; obiekt w AD nazywa się tak jak login),
 - wybór OU z drzewem katalogu i wyszukiwarką OU,
 - podgląd i eksport (PDF / schowek) kluczy odzyskiwania BitLocker dla komputerów,
+- blokowanie konta (soft delete): wyłączenie, usunięcie ze wszystkich grup (lista grup zapisywana w logach) i przeniesienie do OU zablokowane_konta,
+- podgląd i usuwanie certyfikatów (userCertificate) przypisanych do konta,
 - odblokowywanie kont przeniesionych do OU zablokowane_konta (z wyborem docelowego OU),
 - zakładka raportów (np. logowania starsze niż X lat),
 - szczegółowe logi zmian (kto, co i jakie wartości zmienił),

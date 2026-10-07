@@ -346,18 +346,43 @@ async function softDeleteAccount(objectDn, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
     const { searchEntries } = await client.search(objectDn, {
       scope: 'base',
-      attributes: ['userAccountControl']
+      attributes: ['userAccountControl', 'memberOf']
     });
     if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
+
+    // Snapshot of group membership taken before anything changes, so the
+    // audit log keeps what the account belonged to. (The primary group,
+    // usually Domain Users, is not listed in memberOf and stays as is.)
+    const rawMemberOf = searchEntries[0].memberOf;
+    const groupsBefore = (Array.isArray(rawMemberOf) ? rawMemberOf : rawMemberOf ? [rawMemberOf] : []).map(String);
 
     const current = Number(searchEntries[0].userAccountControl || 512);
     const next = current | 0x0002;
     await client.modify(objectDn, toChange('replace', 'userAccountControl', String(next)));
 
+    const removedGroups = [];
+    const failedGroups = [];
+    for (const groupDn of groupsBefore) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await client.modify(groupDn, toChange('delete', 'member', objectDn));
+        removedGroups.push(groupDn);
+      } catch (error) {
+        failedGroups.push({ groupDn, message: error.message });
+      }
+    }
+
     const rdn = objectDn.split(',')[0];
     await client.modifyDN(objectDn, `${rdn},${BLOCKED_ACCOUNTS_OU_DN}`);
 
-    return { updated: true, movedTo: BLOCKED_ACCOUNTS_OU_DN };
+    return {
+      updated: true,
+      movedTo: BLOCKED_ACCOUNTS_OU_DN,
+      newDn: `${rdn},${BLOCKED_ACCOUNTS_OU_DN}`,
+      groupsBefore,
+      removedGroups,
+      failedGroups
+    };
   });
 }
 
@@ -476,58 +501,79 @@ function extractCertificateCn(subject) {
   return match ? match[1] : '';
 }
 
+function parseCertificate(buffer, index) {
+  try {
+    const cert = new X509Certificate(buffer);
+    const validTo = new Date(cert.validTo);
+    const validFrom = new Date(cert.validFrom);
+    const now = Date.now();
+    return {
+      index,
+      subject: cert.subject,
+      subjectCn: extractCertificateCn(cert.subject),
+      issuer: cert.issuer,
+      issuerCn: extractCertificateCn(cert.issuer),
+      subjectAltName: cert.subjectAltName || '',
+      validFrom: validFrom.toISOString(),
+      validTo: validTo.toISOString(),
+      expired: validTo.getTime() < now,
+      notYetValid: validFrom.getTime() > now,
+      serialNumber: cert.serialNumber,
+      thumbprint: String(cert.fingerprint || '').replace(/:/g, ''),
+      fingerprint256: cert.fingerprint256
+    };
+  } catch (error) {
+    return {
+      index,
+      subject: 'Nie udało się odczytać certyfikatu',
+      subjectCn: '',
+      issuer: '',
+      issuerCn: '',
+      subjectAltName: '',
+      validFrom: '',
+      validTo: '',
+      expired: false,
+      notYetValid: false,
+      serialNumber: '',
+      thumbprint: '',
+      fingerprint256: require('crypto').createHash('sha256').update(buffer).digest('hex'),
+      parseError: error.message
+    };
+  }
+}
+
+// userCertificate holds binary DER values; without explicitBufferAttributes
+// ldapts decodes them as UTF-8 strings, which corrupts them.
+async function readUserCertificateBuffers(client, userDn) {
+  const { searchEntries } = await client.search(userDn, {
+    scope: 'base',
+    attributes: ['userCertificate'],
+    explicitBufferAttributes: ['userCertificate']
+  });
+  if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
+  const raw = searchEntries[0].userCertificate;
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return list.map((value) => (Buffer.isBuffer(value) ? value : Buffer.from(value)));
+}
+
 async function getUserCertificates(userDn, authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
-    const { searchEntries } = await client.search(userDn, {
-      scope: 'base',
-      attributes: ['userCertificate']
-    });
-    if (!searchEntries.length) throw new AppError('Nie znaleziono obiektu', 404);
-
-    const raw = searchEntries[0].userCertificate;
-    const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
-
-    return list.map((value, index) => {
-      const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value);
-      try {
-        const cert = new X509Certificate(buffer);
-        return {
-          index,
-          subject: cert.subject,
-          subjectCn: extractCertificateCn(cert.subject),
-          issuer: cert.issuer,
-          issuerCn: extractCertificateCn(cert.issuer),
-          validFrom: cert.validFrom,
-          validTo: cert.validTo,
-          serialNumber: cert.serialNumber,
-          fingerprint256: cert.fingerprint256,
-          raw: buffer.toString('base64')
-        };
-      } catch (error) {
-        return {
-          index,
-          subject: 'Nie udało się odczytać certyfikatu',
-          subjectCn: '',
-          issuer: '',
-          issuerCn: '',
-          validFrom: '',
-          validTo: '',
-          serialNumber: '',
-          fingerprint256: '',
-          raw: buffer.toString('base64'),
-          parseError: error.message
-        };
-      }
-    });
+    const buffers = await readUserCertificateBuffers(client, userDn);
+    return buffers.map((buffer, index) => parseCertificate(buffer, index));
   });
 }
 
-async function revokeUserCertificate(userDn, certificateBase64, authContext = null) {
-  if (!certificateBase64) throw new AppError('Brak danych certyfikatu do odwołania', 400);
-  const buffer = Buffer.from(certificateBase64, 'base64');
+// Removes one certificate (matched by its SHA-256 fingerprint) from the
+// account's userCertificate attribute. This does not revoke it at the CA.
+async function deleteUserCertificate(userDn, fingerprint256, authContext = null) {
+  if (!fingerprint256) throw new AppError('Brak identyfikatora certyfikatu do usunięcia', 400);
   return withAdaptiveBind(authContext, async (client) => {
-    await client.modify(userDn, toChange('delete', 'userCertificate', buffer));
-    return { updated: true };
+    const buffers = await readUserCertificateBuffers(client, userDn);
+    const index = buffers.findIndex((buffer, i) => parseCertificate(buffer, i).fingerprint256 === fingerprint256);
+    if (index === -1) throw new AppError('Nie znaleziono certyfikatu na koncie (mógł zostać już usunięty)', 404);
+    const certificate = parseCertificate(buffers[index], index);
+    await client.modify(userDn, toChange('delete', 'userCertificate', buffers[index]));
+    return { deleted: true, certificate };
   });
 }
 
@@ -637,5 +683,5 @@ module.exports = {
   isSamAccountNameTaken,
   suggestLogin,
   getUserCertificates,
-  revokeUserCertificate
+  deleteUserCertificate
 };
