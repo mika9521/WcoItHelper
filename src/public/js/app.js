@@ -640,6 +640,8 @@ function userTemplate(data) {
     { id: 'u-data', title: 'Dane', content: userDataTemplate(data) },
     { id: 'u-settings', title: 'Ustawienia', content: userSettingsTemplate(data) },
     { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'u-perms', title: 'Uprawnienia', content: objectAccessTemplate('perms') },
+    { id: 'u-shares', title: 'Udziały sieciowe', content: objectAccessTemplate('shares') },
     { id: 'u-certs', title: 'Certyfikaty', content: certificatesTemplate(data.distinguishedName || data.dn) },
     { id: 'u-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'user') },
     { id: 'u-dev', title: 'DEV', content: devTemplate(data) }
@@ -1194,8 +1196,15 @@ async function openObject(dn, typeHint) {
           : userTemplate(data);
     state.currentObjectDn = data.distinguishedName || data.dn || dn;
     state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), addMembers: new Set(), removeMembers: new Set(), moveTargetDn: null };
+    state.objectOriginalGroups = new Map(toArray(data.memberOf).map((g) => [String(g).toLowerCase(), String(g)]));
+    state.objectAccountType = String(toArray(data.sAMAccountName)[0] || '').toLowerCase().startsWith('svc_') ? 'service' : 'eskulap-domain';
     applyObjectChangesBtn.classList.remove('d-none');
+    updatePendingChangesInfo();
     bindModalActions();
+    if (type === 'user') {
+      await loadWizardCatalogs();
+      renderObjectAccess();
+    }
     await loadObjectAuditLogs(state.currentObjectDn);
     if (type === 'computer') await loadBitlockerKeys(state.currentObjectDn);
     if (type === 'user') await loadUserCertificates(state.currentObjectDn);
@@ -1210,7 +1219,9 @@ function openMoveOnly(dn, label) {
   objectBody.innerHTML = moveTemplate(dn);
   state.currentObjectDn = dn;
   state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
+  state.objectOriginalGroups = new Map();
   applyObjectChangesBtn.classList.remove('d-none');
+  updatePendingChangesInfo();
   bindModalActions();
   objectModal.show();
 }
@@ -1369,10 +1380,10 @@ function bindModalActions() {
     if (btn.dataset.bound) return;
     btn.dataset.bound = '1';
     btn.addEventListener('click', () => {
-      const groupDn = btn.dataset.groupdn;
-      state.pendingChanges.removeGroups.add(groupDn);
-      state.pendingChanges.addGroups.delete(groupDn);
-      btn.closest('.member-of-line')?.classList.add('pending-removal');
+      // X on a line marked for removal restores it.
+      const restoring = btn.closest('.member-of-line')?.classList.contains('pending-removal');
+      setGroupMembership(btn.dataset.groupdn, restoring);
+      refreshObjectAccess();
     });
   });
 
@@ -1705,16 +1716,248 @@ document.getElementById('groupSearchModal').addEventListener('shown.bs.modal', (
 document.getElementById('referenceUserModal').addEventListener('shown.bs.modal', () => document.getElementById('referenceLookupInput').focus());
 document.getElementById('addMemberModal').addEventListener('shown.bs.modal', () => document.getElementById('memberLookupInput').focus());
 
-function addPendingGroupToObject(item) {
-  const pickedDn = item.dn || item.distinguishedName;
-  state.pendingChanges.addGroups.add(pickedDn);
-  state.pendingChanges.removeGroups.delete(pickedDn);
+// ===== Edycja członkostwa: wspólna logika dla zakładek grup, uprawnień i udziałów =====
+// Original membership (state.objectOriginalGroups) + pending changes give the
+// "effective" groups; all three tabs are derived from it, so a change in any
+// tab is reflected in the others. DNs are compared case-insensitively.
+function findMemberOfLine(groupDn) {
+  const key = String(groupDn).toLowerCase();
+  return Array.from(document.querySelectorAll('#memberOfList .member-of-line'))
+    .find((line) => String(line.dataset.groupdn || '').toLowerCase() === key) || null;
+}
+
+function deleteCaseInsensitive(set, dn) {
+  const key = String(dn).toLowerCase();
+  [...set].forEach((v) => { if (String(v).toLowerCase() === key) set.delete(v); });
+}
+
+function effectiveGroupKeys() {
+  const keys = new Set(state.objectOriginalGroups ? state.objectOriginalGroups.keys() : []);
+  state.pendingChanges?.removeGroups?.forEach((dn) => keys.delete(String(dn).toLowerCase()));
+  state.pendingChanges?.addGroups?.forEach((dn) => keys.add(String(dn).toLowerCase()));
+  return keys;
+}
+
+function setGroupMembership(groupDn, member) {
+  if (!groupDn || !state.pendingChanges) return;
+  const key = String(groupDn).toLowerCase();
+  const original = state.objectOriginalGroups?.get(key);
   const list = document.getElementById('memberOfList');
-  if (list && !list.querySelector(`[data-groupdn="${cssEscapeValue(pickedDn)}"]`)) {
-    list.querySelector(':scope > .text-muted')?.remove();
-    list.insertAdjacentHTML('beforeend', renderPendingMemberLine(pickedDn, true));
-    bindModalActions();
+  const line = findMemberOfLine(groupDn);
+  if (member) {
+    if (original) {
+      deleteCaseInsensitive(state.pendingChanges.removeGroups, groupDn);
+      line?.classList.remove('pending-removal');
+    } else {
+      deleteCaseInsensitive(state.pendingChanges.addGroups, groupDn);
+      state.pendingChanges.addGroups.add(groupDn);
+      if (list && !line) {
+        list.querySelector(':scope > .text-muted')?.remove();
+        list.insertAdjacentHTML('beforeend', renderPendingMemberLine(groupDn, true));
+        bindModalActions();
+      }
+      findMemberOfLine(groupDn)?.classList.remove('pending-removal');
+    }
+  } else if (original) {
+    deleteCaseInsensitive(state.pendingChanges.removeGroups, original);
+    state.pendingChanges.removeGroups.add(original);
+    line?.classList.add('pending-removal');
+  } else {
+    deleteCaseInsensitive(state.pendingChanges.addGroups, groupDn);
+    line?.remove();
+    if (list && !list.querySelector('.member-of-line')) list.innerHTML = '<span class="text-muted">Brak grup</span>';
   }
+  updatePendingChangesInfo();
+}
+
+function updatePendingChangesInfo() {
+  const el = document.getElementById('pendingChangesInfo');
+  if (!el) return;
+  const add = state.pendingChanges?.addGroups?.size || 0;
+  const remove = state.pendingChanges?.removeGroups?.size || 0;
+  el.innerHTML = add || remove
+    ? `Zmiany oczekujące: <span class="text-success fw-semibold">+${add}</span> / <span class="text-danger fw-semibold">−${remove}</span> grup`
+    : '';
+}
+
+function objectAccessTemplate(kind) {
+  const label = kind === 'perms' ? 'uprawnienia, opisu lub grupy' : 'udziału, ścieżki lub opisu';
+  return `
+    <div class="small text-muted mb-2">${kind === 'perms'
+      ? 'Zaznaczenie uprawnienia dodaje jego grupy w zakładce „Członek grup”, odznaczenie je usuwa. Zmiany zapisuje „Zastosuj zmiany”.'
+      : 'Odczyt = grupa <code>-r</code>, odczyt i zapis = grupa <code>-rw</code> (bez grupy <code>-r</code>). Zmiany zapisuje „Zastosuj zmiany”.'}</div>
+    <div class="search-input-wrap mb-2">
+      ${icon('search', 'search-input-icon')}
+      <input class="form-control form-control-sm obj-access-search" data-kind="${kind}" placeholder="Szukaj ${label}…" autocomplete="off" />
+    </div>
+    <div class="perm-list obj-access-list" id="objAccess-${kind}"><div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Ładowanie…</div></div>`;
+}
+
+function objectItemVisible(item, active) {
+  const type = state.objectAccountType;
+  const allowed = !item.allowedTypes || !item.allowedTypes.length || item.allowedTypes.includes(type);
+  return allowed || active;
+}
+
+function notAllowedBadge(item) {
+  const type = state.objectAccountType;
+  const allowed = !item.allowedTypes || !item.allowedTypes.length || item.allowedTypes.includes(type);
+  return allowed ? '' : '<span class="badge text-bg-warning fw-normal ms-1">niedostępne dla tego typu konta</span>';
+}
+
+function permissionState(p, eff) {
+  const have = p.groups.filter((g) => eff.has(g.dn.toLowerCase())).length;
+  return have === 0 ? 'none' : have === p.groups.length ? 'full' : 'partial';
+}
+
+function shareLevelFor(sh, eff) {
+  if (sh.writeGroup?.dn && eff.has(sh.writeGroup.dn.toLowerCase())) return 'rw';
+  if (sh.readGroup?.dn && eff.has(sh.readGroup.dn.toLowerCase())) return 'r';
+  return '';
+}
+
+function renderObjectPermissions() {
+  const list = document.getElementById('objAccess-perms');
+  if (!list) return;
+  const eff = effectiveGroupKeys();
+  const q = (document.querySelector('.obj-access-search[data-kind="perms"]')?.value || '').trim().toLowerCase();
+  const catalog = state.permissionCatalog || [];
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('shield')}<div>Nie zdefiniowano uprawnień. Dodaj je w zakładce <strong>Ustawienia</strong>.</div></div>`;
+    return;
+  }
+  const rows = catalog
+    .map((p) => ({ p, st: permissionState(p, eff) }))
+    .filter(({ p, st }) => objectItemVisible(p, st !== 'none') && permissionMatches(p, q));
+  if (!rows.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania.</div>';
+    return;
+  }
+  let lastCategory = null;
+  list.innerHTML = rows.map(({ p, st }) => {
+    const header = p.category !== lastCategory && (p.category || lastCategory !== null)
+      ? `<div class="perm-category">${escapeHtml(p.category || 'Bez kategorii')}</div>` : '';
+    lastCategory = p.category;
+    const groupsHtml = p.groups.map((g) => `<span class="perm-group ${eff.has(g.dn.toLowerCase()) ? 'perm-group-on' : ''}" title="${escapeHtml(g.dn)}">${icon('group')}${escapeHtml(g.name || dnLabel(g.dn))}</span>`).join('');
+    return `${header}
+      <label class="perm-item ${st !== 'none' ? 'checked' : ''}">
+        <input type="checkbox" class="form-check-input obj-perm-check" value="${escapeHtml(p.id)}" ${st === 'full' ? 'checked' : ''} data-partial="${st === 'partial' ? '1' : ''}">
+        <span class="perm-item-body">
+          <span class="perm-item-name">${escapeHtml(p.name)}${st === 'partial' ? '<span class="badge text-bg-light border fw-normal ms-1">częściowo (brak części grup)</span>' : ''}${notAllowedBadge(p)}</span>
+          ${p.description ? `<span class="perm-item-desc">${escapeHtml(p.description)}</span>` : ''}
+          <span class="perm-item-groups">${groupsHtml}</span>
+        </span>
+      </label>`;
+  }).join('');
+  list.querySelectorAll('.obj-perm-check[data-partial="1"]').forEach((box) => { box.indeterminate = true; });
+}
+
+function renderObjectShares() {
+  const list = document.getElementById('objAccess-shares');
+  if (!list) return;
+  const eff = effectiveGroupKeys();
+  const q = (document.querySelector('.obj-access-search[data-kind="shares"]')?.value || '').trim().toLowerCase();
+  const catalog = state.shareCatalog || [];
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('folder')}<div>Nie zdefiniowano udziałów. Dodaj je w zakładce <strong>Ustawienia</strong>.</div></div>`;
+    return;
+  }
+  const rows = catalog
+    .map((sh) => ({ sh, level: shareLevelFor(sh, eff) }))
+    .filter(({ sh, level }) => objectItemVisible(sh, Boolean(level)) && shareMatches(sh, q));
+  if (!rows.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak udziałów pasujących do wyszukiwania.</div>';
+    return;
+  }
+  list.innerHTML = rows.map(({ sh, level }) => {
+    const both = sh.readGroup?.dn && sh.writeGroup?.dn && eff.has(sh.readGroup.dn.toLowerCase()) && eff.has(sh.writeGroup.dn.toLowerCase());
+    const opt = (value, label) => `
+      <input type="radio" class="btn-check obj-share-level" name="objshare-${escapeHtml(sh.id)}" id="objshare-${escapeHtml(sh.id)}-${value || 'none'}" value="${value}" data-id="${escapeHtml(sh.id)}" ${level === value ? 'checked' : ''}>
+      <label for="objshare-${escapeHtml(sh.id)}-${value || 'none'}">${label}</label>`;
+    return `
+      <div class="perm-item share-item ${level ? 'checked' : ''}">
+        <span class="share-item-icon">${icon('folder')}</span>
+        <span class="perm-item-body flex-grow-1">
+          <span class="perm-item-name">${escapeHtml(sh.name)}${notAllowedBadge(sh)}${both ? '<span class="badge text-bg-light border fw-normal ms-1">ma -r i -rw: wybierz poziom, aby uporządkować</span>' : ''}</span>
+          <span class="share-path font-monospace">${escapeHtml(sh.path)}</span>
+          ${sh.description ? `<span class="perm-item-desc">${escapeHtml(sh.description)}</span>` : ''}
+          <span class="perm-item-groups">${shareGroupsHtml(sh, level)}</span>
+        </span>
+        <span class="segmented segmented-sm share-levels" role="radiogroup" aria-label="Dostęp do ${escapeHtml(sh.name)}">
+          ${opt('', 'Brak')}${sh.readGroup?.dn ? opt('r', 'Odczyt') : ''}${sh.writeGroup?.dn ? opt('rw', 'Odczyt i zapis') : ''}
+        </span>
+      </div>`;
+  }).join('');
+}
+
+function renderObjectAccess() {
+  renderObjectPermissions();
+  renderObjectShares();
+}
+
+function refreshObjectAccess() {
+  if (document.getElementById('objAccess-perms')) renderObjectAccess();
+}
+
+// Groups still needed by other fully granted permissions or by active shares
+// are kept when something is removed.
+function groupsNeededExcept({ permId = null, shareId = null } = {}) {
+  const eff = effectiveGroupKeys();
+  const needed = new Set();
+  (state.permissionCatalog || []).forEach((p) => {
+    if (p.id !== permId && permissionState(p, eff) === 'full') p.groups.forEach((g) => needed.add(g.dn.toLowerCase()));
+  });
+  (state.shareCatalog || []).forEach((sh) => {
+    if (sh.id === shareId) return;
+    const level = shareLevelFor(sh, eff);
+    const g = level === 'rw' ? sh.writeGroup : level === 'r' ? sh.readGroup : null;
+    if (g?.dn) needed.add(g.dn.toLowerCase());
+  });
+  return needed;
+}
+
+objectBody.addEventListener('change', (event) => {
+  const permBox = event.target.closest('.obj-perm-check');
+  if (permBox) {
+    const p = state.permissionCatalog.find((x) => x.id === permBox.value);
+    if (!p) return;
+    if (permBox.checked) {
+      p.groups.forEach((g) => setGroupMembership(g.dn, true));
+    } else {
+      const needed = groupsNeededExcept({ permId: p.id });
+      p.groups.filter((g) => !needed.has(g.dn.toLowerCase())).forEach((g) => setGroupMembership(g.dn, false));
+    }
+    renderObjectAccess();
+    return;
+  }
+  const shareRadio = event.target.closest('.obj-share-level');
+  if (shareRadio) {
+    const sh = state.shareCatalog.find((x) => x.id === shareRadio.dataset.id);
+    if (!sh) return;
+    const needed = groupsNeededExcept({ shareId: sh.id });
+    const drop = (g) => { if (g?.dn && !needed.has(g.dn.toLowerCase())) setGroupMembership(g.dn, false); };
+    const level = shareRadio.value;
+    if (level === 'rw') {
+      setGroupMembership(sh.writeGroup.dn, true);
+      drop(sh.readGroup);
+    } else if (level === 'r') {
+      setGroupMembership(sh.readGroup.dn, true);
+      drop(sh.writeGroup);
+    } else {
+      drop(sh.readGroup);
+      drop(sh.writeGroup);
+    }
+    renderObjectAccess();
+  }
+});
+
+objectBody.addEventListener('input', debounce((event) => {
+  if (event.target.closest('.obj-access-search')) renderObjectAccess();
+}, 150));
+
+function addPendingGroupToObject(item) {
+  setGroupMembership(item.dn || item.distinguishedName, true);
+  refreshObjectAccess();
   showToast('Dodano do zmian oczekujących');
 }
 
@@ -1795,20 +2038,8 @@ document.getElementById('clearAllCopyGroups').addEventListener('click', () => {
 
 document.getElementById('applyCopyGroupsBtn').addEventListener('click', async () => {
   const selectedGroups = Array.from(document.querySelectorAll('.copy-group-check:checked')).map((x) => x.value);
-  selectedGroups.forEach((groupDn) => {
-    state.pendingChanges.addGroups.add(groupDn);
-    state.pendingChanges.removeGroups.delete(groupDn);
-  });
-  const list = document.getElementById('memberOfList');
-  if (list) {
-    list.querySelector(':scope > .text-muted')?.remove();
-    selectedGroups.forEach((groupDn) => {
-      if (!list.querySelector(`[data-groupdn="${cssEscapeValue(groupDn)}"]`)) {
-        list.insertAdjacentHTML('beforeend', renderPendingMemberLine(groupDn, true));
-      }
-    });
-    bindModalActions();
-  }
+  selectedGroups.forEach((groupDn) => setGroupMembership(groupDn, true));
+  refreshObjectAccess();
   copyGroupsModal.hide();
   showToast('Grupy dodane do zmian oczekujących');
 });
