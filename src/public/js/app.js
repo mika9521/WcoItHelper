@@ -2164,6 +2164,8 @@ document.getElementById('newUserMustChangePwd').addEventListener('change', (even
 
 function renderNewUserGroups() {
   if (state.newUser.step === WIZARD_LAST_STEP) renderNewUserSummary();
+  renderCopyBanners();
+  renderCopyPreview();
   const groups = Array.from(state.newUser.groups);
   document.getElementById('newUserGroupsCount').textContent = String(groups.length);
   if (!groups.length) {
@@ -2172,7 +2174,7 @@ function renderNewUserGroups() {
   }
   newUserGroupsList.innerHTML = groups
     .sort((x, y) => dnLabel(x).localeCompare(dnLabel(y), 'pl', { sensitivity: 'base' }))
-    .map((dn) => `<span class="chip" title="${escapeHtml(dn)}">${icon('group')}<span>${escapeHtml(dnLabel(dn))}</span><button type="button" class="chip-remove" data-dn="${escapeHtml(dn)}" aria-label="Usuń grupę" title="Usuń">${icon('x')}</button></span>`)
+    .map((dn) => `<span class="chip ${isCopied('groups', dn) ? 'chip-from-ref' : ''}" title="${escapeHtml(dn)}">${icon('group')}<span>${escapeHtml(dnLabel(dn))}</span>${isCopied('groups', dn) ? fromRefBadge : ''}<button type="button" class="chip-remove" data-dn="${escapeHtml(dn)}" aria-label="Usuń grupę" title="Usuń">${icon('x')}</button></span>`)
     .join('');
 }
 
@@ -2273,6 +2275,74 @@ async function applyReferenceCopy() {
   renderNewUserGroups();
 }
 
+function referenceDisplayName() {
+  return document.getElementById('newUserReferenceName').textContent || 'wzorca';
+}
+
+const fromRefBadge = '<span class="from-ref-badge">od wzorca</span>';
+
+function isCopied(kind, key) {
+  const c = state.newUser.copied;
+  return Boolean(state.newUser.copyFromRef && c && c[kind].has(key));
+}
+
+// What the copy selected, as lists of display items (only items still selected).
+function copiedItems() {
+  const c = state.newUser.copied;
+  if (!c) return { perms: [], shares: [], groups: [] };
+  return {
+    perms: state.permissionCatalog.filter((p) => c.perms.has(p.id) && state.newUser.permissions.has(p.id)),
+    shares: state.shareCatalog.filter((sh) => c.shares.has(sh.id) && state.newUser.shares.has(sh.id))
+      .map((sh) => ({ share: sh, level: state.newUser.shares.get(sh.id) })),
+    groups: [...c.groups].filter((dn) => state.newUser.groups.has(dn))
+  };
+}
+
+function renderCopyPreview() {
+  const box = document.getElementById('newUserCopyPreview');
+  const on = state.newUser.copyFromRef && state.newUser.copied;
+  box.classList.toggle('d-none', !on);
+  if (!on) return;
+  const items = copiedItems();
+  const refCount = (state.newUser.referenceGroups || []).length;
+  const warnings = [];
+  if (!refCount) warnings.push('Użytkownik wzorcowy nie należy do żadnej grupy (poza grupą podstawową), więc nie ma czego kopiować.');
+  if (refCount && !state.permissionCatalog.length) warnings.push('W Ustawieniach nie zdefiniowano jeszcze uprawnień, więc krok 3 pozostanie pusty.');
+  if (refCount && !state.shareCatalog.length) warnings.push('W Ustawieniach nie zdefiniowano jeszcze udziałów sieciowych, więc krok 4 pozostanie pusty.');
+  const col = (title, step, html, count) => `
+    <div class="copy-preview-col">
+      <div class="copy-preview-title">${escapeHtml(title)} <span class="badge rounded-pill text-bg-light border">${count}</span> <span class="text-muted fw-normal">· krok ${step}</span></div>
+      ${count ? html : '<div class="text-muted small">nic do skopiowania</div>'}
+    </div>`;
+  box.innerHTML = `
+    <div class="copy-preview-head">${icon('check')} Skopiowano od: <strong>${escapeHtml(referenceDisplayName())}</strong>. Pozycje są już zaznaczone w kolejnych krokach.</div>
+    ${warnings.map((w) => `<div class="copy-preview-warn">${icon('info')} ${escapeHtml(w)}</div>`).join('')}
+    <div class="copy-preview-grid">
+      ${col('Uprawnienia', 3, `<ul>${items.perms.map((p) => `<li>${escapeHtml(p.name)}</li>`).join('')}</ul>`, items.perms.length)}
+      ${col('Udziały sieciowe', 4, `<ul>${items.shares.map(({ share, level }) => `<li>${escapeHtml(share.name)} <span class="text-muted">(${escapeHtml(SHARE_LEVELS[level])})</span></li>`).join('')}</ul>`, items.shares.length)}
+      ${col('Inne grupy', 5, `<ul>${items.groups.map((dn) => `<li title="${escapeHtml(dn)}">${escapeHtml(dnLabel(dn))}</li>`).join('')}</ul>`, items.groups.length)}
+    </div>`;
+}
+
+function renderCopyBanners() {
+  const on = state.newUser.copyFromRef && state.newUser.copied;
+  const items = copiedItems();
+  const texts = {
+    3: [items.perms.length, 'uprawnień', !state.permissionCatalog.length ? 'Brak zdefiniowanych uprawnień w Ustawieniach.' : ''],
+    4: [items.shares.length, 'udziałów', !state.shareCatalog.length ? 'Brak zdefiniowanych udziałów w Ustawieniach.' : ''],
+    5: [items.groups.length, 'grup', '']
+  };
+  document.querySelectorAll('[data-copy-banner]').forEach((el) => {
+    const [count, noun, extra] = texts[el.dataset.copyBanner];
+    el.classList.toggle('d-none', !on);
+    if (!on) return;
+    el.classList.toggle('copy-banner-empty', !count);
+    el.innerHTML = `${icon('copy')}<span>${count
+      ? `Skopiowano od <strong>${escapeHtml(referenceDisplayName())}</strong>: ${count} ${noun}. Oznaczone jako ${fromRefBadge}. Możesz je odznaczyć.`
+      : `Od <strong>${escapeHtml(referenceDisplayName())}</strong> nie skopiowano tu żadnych ${noun}. ${escapeHtml(extra)}`}</span>`;
+  });
+}
+
 function updateCopyToggle() {
   const btn = document.getElementById('newUserCopyPermsBtn');
   const on = state.newUser.copyFromRef;
@@ -2280,20 +2350,32 @@ function updateCopyToggle() {
   btn.classList.toggle('active', on);
   btn.setAttribute('aria-pressed', on ? 'true' : 'false');
   btn.querySelector('.copy-toggle-icon').innerHTML = icon(on ? 'check' : 'copy');
-  btn.querySelector('.copy-toggle-label').textContent = on ? 'Uprawnienia wzorca zostaną skopiowane' : 'Kopiuj uprawnienia od wzorca';
+  btn.querySelector('.copy-toggle-label').textContent = on ? 'Uprawnienia wzorca skopiowane (kliknij, aby cofnąć)' : 'Kopiuj uprawnienia od wzorca';
   document.getElementById('newUserCopyInfo').textContent = on && c
-    ? `Zaznaczono: ${c.perms.size} uprawnień, ${c.shares.size} udziałów, ${c.groups.size} innych grup. Możesz je zmienić w kolejnych krokach.`
+    ? ''
     : 'Zaznaczy w kolejnych krokach te same uprawnienia, udziały i grupy co u wzorca.';
+  renderCopyPreview();
+  renderCopyBanners();
 }
 
 document.getElementById('newUserCopyPermsBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('newUserCopyPermsBtn');
   state.newUser.copyFromRef = !state.newUser.copyFromRef;
-  if (state.newUser.copyFromRef) await applyReferenceCopy();
-  else {
-    undoReferenceCopy();
-    renderNewUserGroups();
+  btn.disabled = true;
+  try {
+    if (state.newUser.copyFromRef) {
+      await applyReferenceCopy();
+      const items = copiedItems();
+      showToast(`Skopiowano od wzorca: ${items.perms.length} uprawnień, ${items.shares.length} udziałów, ${items.groups.length} innych grup`);
+    } else {
+      undoReferenceCopy();
+      renderNewUserGroups();
+      showToast('Cofnięto kopiowanie uprawnień od wzorca');
+    }
+  } finally {
+    btn.disabled = false;
+    updateCopyToggle();
   }
-  updateCopyToggle();
 });
 
 function clearReferenceUser() {
@@ -2507,7 +2589,7 @@ function renderNewUserPermissions() {
       <label class="perm-item ${checked ? 'checked' : ''}">
         <input type="checkbox" class="form-check-input perm-check" value="${escapeHtml(p.id)}" ${checked ? 'checked' : ''}>
         <span class="perm-item-body">
-          <span class="perm-item-name">${escapeHtml(p.name)}</span>
+          <span class="perm-item-name">${escapeHtml(p.name)}${isCopied('perms', p.id) && checked ? fromRefBadge : ''}</span>
           ${p.description ? `<span class="perm-item-desc">${escapeHtml(p.description)}</span>` : ''}
           <span class="perm-item-groups">${permissionGroupsLine(p)}</span>
         </span>
@@ -2523,6 +2605,9 @@ document.getElementById('newUserPermList').addEventListener('change', (event) =>
   else state.newUser.permissions.delete(box.value);
   box.closest('.perm-item').classList.toggle('checked', box.checked);
   document.getElementById('newUserPermCount').textContent = String(state.newUser.permissions.size);
+  renderNewUserPermissions();
+  renderCopyBanners();
+  renderCopyPreview();
   renderNewUserSummary();
 });
 document.getElementById('newUserPermSearch').addEventListener('input', debounce(renderNewUserPermissions, 150));
@@ -2559,7 +2644,7 @@ function renderNewUserShares() {
       <div class="perm-item share-item ${level ? 'checked' : ''}" data-id="${escapeHtml(sh.id)}">
         <span class="share-item-icon">${icon('folder')}</span>
         <span class="perm-item-body flex-grow-1">
-          <span class="perm-item-name">${escapeHtml(sh.name)}</span>
+          <span class="perm-item-name">${escapeHtml(sh.name)}${isCopied('shares', sh.id) && level ? fromRefBadge : ''}</span>
           <span class="share-path font-monospace">${escapeHtml(sh.path)}</span>
           ${sh.description ? `<span class="perm-item-desc">${escapeHtml(sh.description)}</span>` : ''}
           <span class="perm-item-groups">
@@ -2580,6 +2665,8 @@ document.getElementById('newUserShareList').addEventListener('change', (event) =
   if (radio.value) state.newUser.shares.set(radio.dataset.id, radio.value);
   else state.newUser.shares.delete(radio.dataset.id);
   renderNewUserShares();
+  renderCopyBanners();
+  renderCopyPreview();
 });
 document.getElementById('newUserShareSearch').addEventListener('input', debounce(renderNewUserShares, 150));
 
