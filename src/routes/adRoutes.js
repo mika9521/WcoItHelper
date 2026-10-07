@@ -25,6 +25,13 @@ const {
 } = require('../services/ad/adService');
 const { staleLogons } = require('../services/reports/reportService');
 const {
+  listPermissions,
+  createPermission,
+  updatePermission,
+  deletePermission,
+  getPermissionsByIds
+} = require('../services/permissions/permissionService');
+const {
   logEvent,
   readEvents,
   getObjectEvents,
@@ -530,16 +537,28 @@ router.get('/api/user/login-availability', async (req, res) => {
 
 router.post('/api/user/create', async (req, res) => {
   try {
-    const result = await createUser(req.body, adAuthFromRequest(req));
+    // Permissions are resolved to groups here (not trusted from the client),
+    // then merged with any additional groups picked in the wizard.
+    const permissions = await getPermissionsByIds(req.body?.permissionIds);
+    const groupMap = new Map();
+    permissions.forEach((p) => p.groups.forEach((g) => groupMap.set(g.dn.toLowerCase(), g.dn)));
+    (Array.isArray(req.body?.groups) ? req.body.groups : []).forEach((dn) => {
+      if (dn) groupMap.set(String(dn).toLowerCase(), String(dn));
+    });
+    const result = await createUser({ ...req.body, groups: [...groupMap.values()] }, adAuthFromRequest(req));
     await audit(req, {
       action: 'user_create',
-      status: 'success',
+      status: result.failedGroups?.length ? 'error' : 'success',
       scopeType: 'user',
       scopeDn: result?.dn || '',
-      message: 'Utworzenie użytkownika',
+      message: result.failedGroups?.length
+        ? `Utworzenie użytkownika (nie dodano do ${result.failedGroups.length} grup)`
+        : 'Utworzenie użytkownika',
       details: {
         login: req.body?.login || '',
+        userType: req.body?.userType || '',
         referenceUserDn: req.body?.referenceUserDn || '',
+        permissions: permissions.map((p) => ({ id: p.id, name: p.name })),
         settings: result?.settings || {},
         addedGroups: result?.addedGroups || [],
         failedGroups: result?.failedGroups || []
@@ -553,6 +572,62 @@ router.post('/api/user/create', async (req, res) => {
       message: error.message,
       details: { login: req.body?.login || '' }
     });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.get('/api/permissions', async (req, res) => {
+  try {
+    res.json(await listPermissions());
+  } catch (error) {
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.post('/api/permissions', async (req, res) => {
+  try {
+    const permission = await createPermission(req.body, req.session?.user?.login || '');
+    await audit(req, {
+      action: 'permission_create',
+      status: 'success',
+      message: `Dodano uprawnienie „${permission.name}”`,
+      details: { permission }
+    });
+    res.json(permission);
+  } catch (error) {
+    await audit(req, { action: 'permission_create', status: 'error', message: error.message, details: { payload: req.body } });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.put('/api/permissions/:id', async (req, res) => {
+  try {
+    const { before, after } = await updatePermission(req.params.id, req.body, req.session?.user?.login || '');
+    await audit(req, {
+      action: 'permission_update',
+      status: 'success',
+      message: `Zmieniono uprawnienie „${after.name}”`,
+      details: { before, after }
+    });
+    res.json(after);
+  } catch (error) {
+    await audit(req, { action: 'permission_update', status: 'error', message: error.message, details: { id: req.params.id } });
+    res.status(error.status || 500).json({ message: error.message });
+  }
+});
+
+router.delete('/api/permissions/:id', async (req, res) => {
+  try {
+    const permission = await deletePermission(req.params.id);
+    await audit(req, {
+      action: 'permission_delete',
+      status: 'success',
+      message: `Usunięto uprawnienie „${permission.name}”`,
+      details: { permission }
+    });
+    res.json({ deleted: true });
+  } catch (error) {
+    await audit(req, { action: 'permission_delete', status: 'error', message: error.message, details: { id: req.params.id } });
     res.status(error.status || 500).json({ message: error.message });
   }
 });

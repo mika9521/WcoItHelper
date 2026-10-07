@@ -47,7 +47,8 @@ const state = {
   selectedOuDn: null,
   groupPickHandler: null,
   userPickHandler: null,
-  newUser: { referenceDn: null, referenceGroups: [], groups: new Set(), loginTouched: false },
+  newUser: { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), loginTouched: false },
+  permissionCatalog: [],
   softDeleteTargetDn: null,
   unlockTargetDn: null,
   certificates: [],
@@ -746,6 +747,17 @@ function formatAuditDetails(event) {
     }
   } else if (action === 'user_certificate_delete') {
     rows.push(`<div class="mt-1"><span class="fw-semibold">Certyfikat:</span> ${escapeHtml(details.subject || details.subjectCn || '-')}${details.thumbprint ? ` · odcisk <code class="small">${escapeHtml(details.thumbprint)}</code>` : ''}${details.serialNumber ? ` · nr <code class="small">${escapeHtml(details.serialNumber)}</code>` : ''}</div>`);
+  } else if (action === 'permission_create' || action === 'permission_delete') {
+    const p = details.permission || {};
+    rows.push(`<div class="mt-1"><span class="fw-semibold">${escapeHtml(p.name || '-')}</span>${formatDnList((p.groups || []).map((g) => g.dn))}</div>`);
+  } else if (action === 'permission_update') {
+    const before = (details.before?.groups || []).map((g) => g.dn);
+    const after = (details.after?.groups || []).map((g) => g.dn);
+    const added = after.filter((g) => !before.includes(g));
+    const removed = before.filter((g) => !after.includes(g));
+    if (details.before?.name !== details.after?.name) rows.push(`<div class="mt-1">Nazwa: ${escapeHtml(details.before?.name || '')} → <strong>${escapeHtml(details.after?.name || '')}</strong></div>`);
+    if (added.length) rows.push(`<div class="mt-1"><span class="text-success fw-semibold">+ Grupy:</span>${formatDnList(added)}</div>`);
+    if (removed.length) rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">− Grupy:</span>${formatDnList(removed)}</div>`);
   } else if (action === 'object_move') {
     if (event.targetDn) rows.push(`<div class="mt-1">Przeniesiono do: <code class="small">${escapeHtml(event.targetDn)}</code></div>`);
   } else if (action === 'user_settings_update') {
@@ -758,6 +770,9 @@ function formatAuditDetails(event) {
     }
   } else if (action === 'user_create') {
     if (details.login) rows.push(`<div class="mt-1"><span class="fw-semibold">Login:</span> ${escapeHtml(details.login)}</div>`);
+    if ((details.permissions || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Uprawnienia:</span> ${details.permissions.map((p) => escapeHtml(p.name)).join(', ')}</div>`);
+    if ((details.addedGroups || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Dodano do grup:</span>${formatDnList(details.addedGroups)}</div>`);
+    if ((details.failedGroups || []).length) rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">Nie dodano do:</span>${formatDnList(details.failedGroups.map((f) => f.groupDn))}</div>`);
   } else if (action === 'search') {
     rows.push(`<div class="mt-1">Zapytanie: <code>${escapeHtml(details.query || '')}</code> · typ: ${escapeHtml(details.type || '-')} · wyników: ${details.results ?? '-'}</div>`);
   } else if (details && Object.keys(details).length) {
@@ -1977,13 +1992,21 @@ const LOGIN_HINT = 'Generowany automatycznie po wpisaniu imienia i nazwiska. Mo�
 let newUserLoginAvailable = false;
 let newUserLoginSeq = 0;
 
-function updateNewUserSubmitState() {
-  const ready = newUserLoginAvailable
+function isNewUserInfoValid() {
+  return Boolean(newUserLoginAvailable
     && newUserFirstName.value.trim()
     && newUserLastName.value.trim()
     && newUserPassword.value
-    && newUserOuDn.value;
-  newUserSubmitBtn.disabled = !ready;
+    && newUserOuDn.value);
+}
+
+function updateNewUserSubmitState() {
+  const step = state.newUser.step || 1;
+  const nextBtn = document.getElementById('newUserNextBtn');
+  if (step === 1) nextBtn.disabled = !newUserForm.querySelector('input[name="userType"]:checked');
+  if (step === 2) nextBtn.disabled = !isNewUserInfoValid();
+  newUserSubmitBtn.disabled = step !== 3 || !isNewUserInfoValid();
+  if (step === 3) renderNewUserSummary();
 }
 
 function setNewUserLoginState(kind, message) {
@@ -2135,10 +2158,11 @@ document.getElementById('newUserMustChangePwd').addEventListener('change', (even
 
 function renderNewUserGroups() {
   updateReferenceGroupsButton();
+  if (state.newUser.step === 3) renderNewUserSummary();
   const groups = Array.from(state.newUser.groups);
   document.getElementById('newUserGroupsCount').textContent = String(groups.length);
   if (!groups.length) {
-    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak grup. Dodaj grupy ręcznie lub skopiuj je od użytkownika wzorcowego.</div>';
+    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak dodatkowych grup. Grupy z zaznaczonych uprawnień są dodawane automatycznie.</div>';
     return;
   }
   newUserGroupsList.innerHTML = groups
@@ -2227,21 +2251,29 @@ function resetNewUserForm() {
   newUserForm.reset();
   newUserForm.querySelector('input[name="accountExpiresDate"]').disabled = true;
   newUserPassword.type = 'password';
-  state.newUser = { referenceDn: null, referenceGroups: [], groups: new Set(), loginTouched: false };
+  state.newUser = { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), loginTouched: false };
   clearReferenceUser();
   setOuFieldValue('newUserOuDn', '', { silent: true });
   renderNewUserGroups();
   setNewUserLoginState('idle', '');
   showPwdOptionsHint('');
+  document.getElementById('newUserPermSearch').value = '';
+  showNewUserStep(1);
+  loadPermissionCatalog().then(renderNewUserPermissions);
 }
 
 // The picker modals open on top of the wizard without hiding it, so this
 // only fires when the wizard is opened fresh.
 newUserModalEl.addEventListener('show.bs.modal', resetNewUserForm);
-newUserModalEl.addEventListener('shown.bs.modal', () => newUserFirstName.focus());
+newUserModalEl.addEventListener('shown.bs.modal', () => newUserForm.querySelector('.user-type-input')?.focus());
 
 newUserForm.addEventListener('submit', async (event) => {
   event.preventDefault();
+  // Enter in a step-1/2 field means "next", not "create".
+  if (state.newUser.step !== 3) {
+    goNewUserNext();
+    return;
+  }
   if (newUserSubmitBtn.disabled) return;
   const spinner = document.getElementById('newUserSubmitSpinner');
   try {
@@ -2257,13 +2289,14 @@ newUserForm.addEventListener('submit', async (event) => {
     payload.accountDisabled = parseTruthy(payload.accountDisabled);
     payload.accountExpiresMode = payload.accountExpiresModeNewUser || 'never';
     payload.groups = Array.from(state.newUser.groups);
+    payload.permissionIds = Array.from(state.newUser.permissions);
     delete payload.accountExpiresModeNewUser;
     const result = await api('/api/user/create', { method: 'POST', body: JSON.stringify(payload) });
     const failed = result.failedGroups || [];
     if (failed.length) {
       showToast(`Utworzono ${result.login}, ale nie dodano do ${failed.length} grup(y): ${failed.map((f) => dnLabel(f.groupDn)).join(', ')}`, true);
     } else {
-      showToast(`Utworzono użytkownika ${result.login}${payload.groups.length ? ` i dodano do ${payload.groups.length} grup(y)` : ''}`);
+      showToast(`Utworzono użytkownika ${result.login}${(result.addedGroups || []).length ? ` i dodano do ${result.addedGroups.length} grup(y)` : ''}`);
     }
     bootstrap.Modal.getOrCreateInstance(newUserModalEl).hide();
     searchInput.value = result.login;
@@ -2283,6 +2316,280 @@ document.querySelectorAll('input[name="accountExpiresModeNewUser"]').forEach((ra
     dateInput.disabled = event.target.value !== 'date';
   });
 });
+
+// ----- Kroki kreatora -----
+const WIZARD_NEXT_LABELS = { 1: 'Informacje o użytkowniku', 2: 'Uprawnienia użytkownika' };
+
+function showNewUserStep(step) {
+  state.newUser.step = step;
+  newUserForm.querySelectorAll('.wizard-pane').forEach((pane) => pane.classList.toggle('d-none', Number(pane.dataset.pane) !== step));
+  document.querySelectorAll('#newUserSteps .wizard-step').forEach((li) => {
+    const n = Number(li.dataset.step);
+    li.classList.toggle('active', n === step);
+    li.classList.toggle('done', n < step);
+  });
+  document.getElementById('newUserBackBtn').classList.toggle('d-none', step === 1);
+  document.getElementById('newUserNextBtn').classList.toggle('d-none', step === 3);
+  newUserSubmitBtn.classList.toggle('d-none', step !== 3);
+  if (WIZARD_NEXT_LABELS[step]) document.getElementById('newUserNextLabel').textContent = WIZARD_NEXT_LABELS[step];
+  newUserModalEl.querySelector('.modal-body').scrollTop = 0;
+  updateNewUserSubmitState();
+  if (step === 2) setTimeout(() => newUserFirstName.focus(), 50);
+  if (step === 3) {
+    renderNewUserPermissions();
+    setTimeout(() => document.getElementById('newUserPermSearch').focus(), 50);
+  }
+}
+
+function goNewUserNext() {
+  const step = state.newUser.step;
+  if (step === 1 && newUserForm.querySelector('input[name="userType"]:checked')) showNewUserStep(2);
+  else if (step === 2) {
+    if (isNewUserInfoValid()) showNewUserStep(3);
+    else showToast('Uzupełnij imię, nazwisko, dostępny login, hasło i OU', true);
+  }
+}
+
+document.getElementById('newUserNextBtn').addEventListener('click', goNewUserNext);
+document.getElementById('newUserBackBtn').addEventListener('click', () => showNewUserStep(Math.max(1, state.newUser.step - 1)));
+newUserForm.querySelectorAll('input[name="userType"]').forEach((radio) => {
+  radio.addEventListener('change', updateNewUserSubmitState);
+  radio.closest('.user-type-card').addEventListener('dblclick', () => {
+    radio.checked = true;
+    goNewUserNext();
+  });
+});
+
+// ----- Uprawnienia w kreatorze -----
+async function loadPermissionCatalog() {
+  try {
+    state.permissionCatalog = await api('/api/permissions');
+  } catch (error) {
+    state.permissionCatalog = [];
+    showToast(`Uprawnienia: ${error.message}`, true);
+  }
+  return state.permissionCatalog;
+}
+
+function permissionMatches(p, q) {
+  if (!q) return true;
+  const hay = [p.name, p.description, p.category, ...p.groups.map((g) => `${g.name} ${dnLabel(g.dn)}`)].join(' ').toLowerCase();
+  return q.split(/\s+/).every((word) => hay.includes(word));
+}
+
+function permissionGroupsLine(p) {
+  return p.groups.map((g) => `<span class="perm-group" title="${escapeHtml(g.dn)}">${icon('group')}${escapeHtml(g.name || dnLabel(g.dn))}</span>`).join('');
+}
+
+function renderNewUserPermissions() {
+  const list = document.getElementById('newUserPermList');
+  const q = document.getElementById('newUserPermSearch').value.trim().toLowerCase();
+  const catalog = state.permissionCatalog || [];
+  document.getElementById('newUserPermCount').textContent = String(state.newUser.permissions.size);
+  document.getElementById('newUserPermFromReferenceBtn').classList.toggle('d-none', !state.newUser.referenceDn || !catalog.length);
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('shield')}<div>Nie zdefiniowano jeszcze żadnych uprawnień.<br>Dodaj je w zakładce <strong>Ustawienia</strong>; do tego czasu możesz dodać grupy ręcznie.</div></div>`;
+    renderNewUserSummary();
+    return;
+  }
+  const visible = catalog.filter((p) => permissionMatches(p, q));
+  if (!visible.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania.</div>';
+    renderNewUserSummary();
+    return;
+  }
+  let lastCategory = null;
+  list.innerHTML = visible.map((p) => {
+    const header = p.category !== lastCategory && (p.category || lastCategory !== null)
+      ? `<div class="perm-category">${escapeHtml(p.category || 'Bez kategorii')}</div>` : '';
+    lastCategory = p.category;
+    const checked = state.newUser.permissions.has(p.id);
+    return `${header}
+      <label class="perm-item ${checked ? 'checked' : ''}">
+        <input type="checkbox" class="form-check-input perm-check" value="${escapeHtml(p.id)}" ${checked ? 'checked' : ''}>
+        <span class="perm-item-body">
+          <span class="perm-item-name">${escapeHtml(p.name)}</span>
+          ${p.description ? `<span class="perm-item-desc">${escapeHtml(p.description)}</span>` : ''}
+          <span class="perm-item-groups">${permissionGroupsLine(p)}</span>
+        </span>
+      </label>`;
+  }).join('');
+  renderNewUserSummary();
+}
+
+document.getElementById('newUserPermList').addEventListener('change', (event) => {
+  const box = event.target.closest('.perm-check');
+  if (!box) return;
+  if (box.checked) state.newUser.permissions.add(box.value);
+  else state.newUser.permissions.delete(box.value);
+  box.closest('.perm-item').classList.toggle('checked', box.checked);
+  document.getElementById('newUserPermCount').textContent = String(state.newUser.permissions.size);
+  renderNewUserSummary();
+});
+document.getElementById('newUserPermSearch').addEventListener('input', debounce(renderNewUserPermissions, 150));
+
+document.getElementById('newUserPermFromReferenceBtn').addEventListener('click', () => {
+  const refGroups = new Set((state.newUser.referenceGroups || []).map((g) => g.toLowerCase()));
+  const matching = state.permissionCatalog.filter((p) => p.groups.every((g) => refGroups.has(g.dn.toLowerCase())));
+  matching.forEach((p) => state.newUser.permissions.add(p.id));
+  renderNewUserPermissions();
+  showToast(matching.length
+    ? `Zaznaczono ${matching.length} uprawnień, które ma użytkownik wzorcowy`
+    : 'Użytkownik wzorcowy nie ma pełnego zestawu grup żadnego uprawnienia');
+});
+
+function newUserResultingGroups() {
+  const map = new Map();
+  state.permissionCatalog
+    .filter((p) => state.newUser.permissions.has(p.id))
+    .forEach((p) => p.groups.forEach((g) => map.set(g.dn.toLowerCase(), g.dn)));
+  state.newUser.groups.forEach((dn) => map.set(dn.toLowerCase(), dn));
+  return [...map.values()];
+}
+
+function renderNewUserSummary() {
+  const holder = document.getElementById('newUserSummary');
+  if (!holder) return;
+  const groups = newUserResultingGroups().sort((a, b) => dnLabel(a).localeCompare(dnLabel(b), 'pl'));
+  const login = newUserLogin.value.trim();
+  holder.innerHTML = `
+    <dl class="cert-summary mb-2">
+      <dt>Użytkownik</dt><dd>${escapeHtml(`${newUserFirstName.value.trim()} ${newUserLastName.value.trim()}`.trim() || '-')}</dd>
+      <dt>Login</dt><dd class="font-monospace">${escapeHtml(login || '-')}</dd>
+      <dt>OU</dt><dd>${newUserOuDn.value ? `<span class="path-inline">${dnToPathHtml(newUserOuDn.value, { skipDomain: true })}</span>` : '-'}</dd>
+      <dt>Uprawnienia</dt><dd>${state.newUser.permissions.size}</dd>
+      <dt>Grupy AD</dt><dd>${groups.length}</dd>
+    </dl>
+    ${groups.length ? `<div class="chip-list">${groups.map((g) => `<span class="chip chip-sm" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}</span>`).join('')}</div>` : '<div class="text-muted">Konto zostanie utworzone bez dodatkowych grup.</div>'}`;
+}
+
+// ===== Ustawienia: uprawnienia =====
+const permissionModal = new bootstrap.Modal(document.getElementById('permissionModal'));
+const permissionEdit = { groups: [] };
+
+function renderPermissionsTable() {
+  const body = document.getElementById('permissionsTableBody');
+  const q = document.getElementById('permissionsSearch').value.trim().toLowerCase();
+  const rows = (state.permissionCatalog || []).filter((p) => permissionMatches(p, q));
+  if (!state.permissionCatalog.length) {
+    body.innerHTML = `<tr><td colspan="4"><div class="empty-state">${icon('shield')}<div>Brak zdefiniowanych uprawnień. Kliknij <strong>Dodaj uprawnienie</strong>, aby utworzyć pierwsze.</div></div></td></tr>`;
+    return;
+  }
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="4"><div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania.</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((p) => `
+    <tr>
+      <td>
+        <div class="fw-semibold">${escapeHtml(p.name)}${p.category ? ` <span class="badge text-bg-light border fw-normal ms-1">${escapeHtml(p.category)}</span>` : ''}</div>
+        ${p.description ? `<div class="small text-muted">${escapeHtml(p.description)}</div>` : ''}
+      </td>
+      <td><div class="perm-item-groups">${permissionGroupsLine(p)}</div></td>
+      <td class="small text-muted">${escapeHtml(new Date(p.updatedAt).toLocaleString('pl-PL'))}${p.updatedBy ? `<div>${escapeHtml(p.updatedBy)}</div>` : ''}</td>
+      <td class="text-end text-nowrap">
+        <button type="button" class="btn-icon perm-edit" data-id="${escapeHtml(p.id)}" title="Edytuj" aria-label="Edytuj">${icon('settings')}</button>
+        <button type="button" class="btn-icon btn-icon-danger perm-delete" data-id="${escapeHtml(p.id)}" title="Usuń" aria-label="Usuń">${icon('x')}</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function refreshPermissionsTable() {
+  await loadPermissionCatalog();
+  renderPermissionsTable();
+}
+
+function renderPermissionEditGroups() {
+  const list = document.getElementById('permissionGroupsList');
+  list.innerHTML = permissionEdit.groups.length
+    ? permissionEdit.groups.map((g, idx) => `<div class="member-of-line"><span class="group-badge" title="${escapeHtml(g.dn)}">${dnChipContent(g.dn)}</span><button type="button" class="btn-icon btn-icon-sm perm-group-remove" data-index="${idx}" title="Usuń" aria-label="Usuń">${icon('x')}</button></div>`).join('')
+    : '<div class="chip-empty">Nie wybrano grup. Kliknij „Wybierz grupę”.</div>';
+}
+
+function openPermissionModal(permission = null) {
+  document.getElementById('permissionModalTitle').textContent = permission ? 'Edytuj uprawnienie' : 'Nowe uprawnienie';
+  document.getElementById('permissionId').value = permission?.id || '';
+  document.getElementById('permissionName').value = permission?.name || '';
+  document.getElementById('permissionCategory').value = permission?.category || '';
+  document.getElementById('permissionDescription').value = permission?.description || '';
+  permissionEdit.groups = (permission?.groups || []).map((g) => ({ ...g }));
+  const categories = [...new Set(state.permissionCatalog.map((p) => p.category).filter(Boolean))];
+  document.getElementById('permissionCategories').innerHTML = categories.map((c) => `<option value="${escapeHtml(c)}">`).join('');
+  renderPermissionEditGroups();
+  permissionModal.show();
+}
+
+document.getElementById('permissionModal').addEventListener('shown.bs.modal', (event) => {
+  if (event.target.id === 'permissionModal') document.getElementById('permissionName').focus();
+});
+document.getElementById('addPermissionBtn').addEventListener('click', () => openPermissionModal());
+document.getElementById('permissionsSearch').addEventListener('input', debounce(renderPermissionsTable, 150));
+document.getElementById('permissionAddGroupBtn').addEventListener('click', () => {
+  openGroupPicker((item) => {
+    const dn = item.dn || item.distinguishedName;
+    if (permissionEdit.groups.some((g) => g.dn.toLowerCase() === dn.toLowerCase())) {
+      showToast('Ta grupa jest już na liście', true);
+      return;
+    }
+    permissionEdit.groups.push({ dn, name: getDisplayName(item) });
+    renderPermissionEditGroups();
+  });
+});
+document.getElementById('permissionGroupsList').addEventListener('click', (event) => {
+  const btn = event.target.closest('.perm-group-remove');
+  if (!btn) return;
+  permissionEdit.groups.splice(Number(btn.dataset.index), 1);
+  renderPermissionEditGroups();
+});
+
+document.getElementById('permissionForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = document.getElementById('permissionId').value;
+  const payload = {
+    name: document.getElementById('permissionName').value.trim(),
+    category: document.getElementById('permissionCategory').value.trim(),
+    description: document.getElementById('permissionDescription').value.trim(),
+    groups: permissionEdit.groups
+  };
+  if (!payload.name) return showToast('Podaj nazwę uprawnienia', true);
+  if (!payload.groups.length) return showToast('Wybierz co najmniej jedną grupę AD', true);
+  const btn = document.getElementById('permissionSaveBtn');
+  try {
+    btn.disabled = true;
+    await api(id ? `/api/permissions/${encodeURIComponent(id)}` : '/api/permissions', {
+      method: id ? 'PUT' : 'POST',
+      body: JSON.stringify(payload)
+    });
+    permissionModal.hide();
+    showToast(id ? 'Zapisano uprawnienie' : 'Dodano uprawnienie');
+    await refreshPermissionsTable();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+  return undefined;
+});
+
+document.getElementById('permissionsTableBody').addEventListener('click', async (event) => {
+  const edit = event.target.closest('.perm-edit');
+  const del = event.target.closest('.perm-delete');
+  const find = (el) => state.permissionCatalog.find((p) => p.id === el.dataset.id);
+  if (edit) openPermissionModal(find(edit));
+  if (del) {
+    const p = find(del);
+    if (!p || !window.confirm(`Usunąć uprawnienie „${p.name}”? Grupy w AD i istniejące konta nie zostaną zmienione.`)) return;
+    try {
+      await api(`/api/permissions/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+      showToast('Usunięto uprawnienie');
+      await refreshPermissionsTable();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+});
+
+document.getElementById('settings-tab').addEventListener('shown.bs.tab', refreshPermissionsTable);
 
 // ===== Nowa grupa =====
 const newGroupName = document.getElementById('newGroupName');

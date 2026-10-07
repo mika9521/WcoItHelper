@@ -37,6 +37,11 @@
           <svg class="icon"><use href="#i-report"/></svg><span>Raporty</span>
         </button>
       </li>
+      <li>
+        <button class="app-nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-panel" data-page-title="Ustawienia" data-page-sub="Uprawnienia użytkowników i ich mapowanie na grupy AD" type="button" role="tab">
+          <svg class="icon"><use href="#i-settings"/></svg><span>Ustawienia</span>
+        </button>
+      </li>
     </ul>
 
     <div class="app-nav-label">Szybkie akcje</div>
@@ -424,6 +429,34 @@
           </div>
         </div>
       </section>
+      <!-- ===== Ustawienia ===== -->
+      <section class="tab-pane fade" id="settings-panel" role="tabpanel" aria-labelledby="settings-tab">
+        <section class="card">
+          <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+              <div>Uprawnienia użytkowników</div>
+              <div class="small text-muted fw-normal">Uprawnienia wybierane w kroku 3 kreatora nowego użytkownika. Każde uprawnienie dodaje konto do przypisanych grup AD.</div>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="addPermissionBtn"><svg class="icon"><use href="#i-plus"/></svg> Dodaj uprawnienie</button>
+          </div>
+          <div class="card-body pb-2">
+            <div class="search-input-wrap" style="max-width: 420px;">
+              <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+              <input class="form-control" id="permissionsSearch" placeholder="Szukaj uprawnienia, opisu lub grupy…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0" id="permissionsTable">
+              <thead>
+                <tr><th>Uprawnienie</th><th>Grupy AD</th><th style="width:170px;">Ostatnia zmiana</th><th style="width:110px;" class="text-end">Akcje</th></tr>
+              </thead>
+              <tbody id="permissionsTableBody">
+                <tr><td colspan="4"><div class="empty-state"><span class="spinner-border spinner-border-sm text-primary"></span><div>Ładowanie…</div></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
     </div>
   </main>
 </div>
@@ -433,6 +466,7 @@
 <%- include('modals/newGroupModal') %>
 <%- include('modals/ouPickerModal') %>
 <%- include('modals/groupToolsModals') %>
+<%- include('modals/permissionModal') %>
 
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
   <div id="appToast" class="toast app-toast align-items-center border-0" role="alert">
