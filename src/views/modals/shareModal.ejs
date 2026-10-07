@@ -1,0 +1,48 @@
+<div class="modal fade" id="shareModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <form id="shareForm" class="modal-content" autocomplete="off" novalidate>
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <span class="modal-title-icon"><svg class="icon"><use href="#i-folder"/></svg></span>
+          <div>
+            <h5 class="modal-title" id="shareModalTitle">Nowy udział sieciowy</h5>
+            <div class="modal-subtitle">Dostęp nadawany przez grupy -r (odczyt) i -rw (odczyt i zapis)</div>
+          </div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="shareId" />
+        <div class="row g-3">
+          <div class="col-md-5">
+            <label class="form-label" for="shareName">Nazwa udziału <span class="text-danger">*</span></label>
+            <input class="form-control" id="shareName" maxlength="120" placeholder="np. Kardiologia – dokumenty" required />
+          </div>
+          <div class="col-md-7">
+            <label class="form-label" for="sharePath">Ścieżka udziału <span class="text-danger">*</span></label>
+            <input class="form-control font-monospace" id="sharePath" maxlength="400" placeholder="\\fs01\kardiologia" required />
+          </div>
+          <div class="col-12">
+            <label class="form-label" for="shareDescription">Opis</label>
+            <textarea class="form-control" id="shareDescription" rows="2" maxlength="1000" placeholder="Co znajduje się w udziale i komu się go nadaje"></textarea>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Grupa: tylko odczyt (<code>-r</code>) <span class="text-danger">*</span></label>
+            <div class="share-group-slot" id="shareReadSlot"></div>
+            <button type="button" class="btn btn-sm btn-outline-primary mt-2 share-pick" data-level="r"><svg class="icon"><use href="#i-search"/></svg> Wybierz grupę -r</button>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Grupa: odczyt i zapis (<code>-rw</code>) <span class="text-danger">*</span></label>
+            <div class="share-group-slot" id="shareWriteSlot"></div>
+            <button type="button" class="btn btn-sm btn-outline-primary mt-2 share-pick" data-level="rw"><svg class="icon"><use href="#i-search"/></svg> Wybierz grupę -rw</button>
+          </div>
+          <div class="col-12"><div class="field-hint mt-0" id="shareGroupsHint">Po wybraniu jednej grupy portal spróbuje sam dobrać drugą (ta sama nazwa z końcówką -r / -rw).</div></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Anuluj</button>
+        <button type="submit" class="btn btn-primary" id="shareSaveBtn">Zapisz</button>
+      </div>
+    </form>
+  </div>
+</div>

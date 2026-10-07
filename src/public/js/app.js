@@ -47,8 +47,9 @@ const state = {
   selectedOuDn: null,
   groupPickHandler: null,
   userPickHandler: null,
-  newUser: { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), loginTouched: false },
+  newUser: { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), shares: new Map(), copyFromRef: false, copied: null, loginTouched: false },
   permissionCatalog: [],
+  shareCatalog: [],
   softDeleteTargetDn: null,
   unlockTargetDn: null,
   certificates: [],
@@ -748,8 +749,12 @@ function formatAuditDetails(event) {
   } else if (action === 'user_certificate_delete') {
     rows.push(`<div class="mt-1"><span class="fw-semibold">Certyfikat:</span> ${escapeHtml(details.subject || details.subjectCn || '-')}${details.thumbprint ? ` · odcisk <code class="small">${escapeHtml(details.thumbprint)}</code>` : ''}${details.serialNumber ? ` · nr <code class="small">${escapeHtml(details.serialNumber)}</code>` : ''}</div>`);
   } else if (action === 'permission_create' || action === 'permission_delete') {
-    const p = details.permission || {};
+    const p = details.item || details.permission || {};
     rows.push(`<div class="mt-1"><span class="fw-semibold">${escapeHtml(p.name || '-')}</span>${formatDnList((p.groups || []).map((g) => g.dn))}</div>`);
+  } else if (action === 'share_create' || action === 'share_delete' || action === 'share_update') {
+    const sh = details.item || details.after || {};
+    rows.push(`<div class="mt-1"><span class="fw-semibold">${escapeHtml(sh.name || '-')}</span> <code class="small">${escapeHtml(sh.path || '')}</code></div>`);
+    rows.push(`<div class="mt-1 small">-r: ${escapeHtml(dnLabel(sh.readGroup?.dn))} · -rw: ${escapeHtml(dnLabel(sh.writeGroup?.dn))}</div>`);
   } else if (action === 'permission_update') {
     const before = (details.before?.groups || []).map((g) => g.dn);
     const after = (details.after?.groups || []).map((g) => g.dn);
@@ -771,6 +776,7 @@ function formatAuditDetails(event) {
   } else if (action === 'user_create') {
     if (details.login) rows.push(`<div class="mt-1"><span class="fw-semibold">Login:</span> ${escapeHtml(details.login)}</div>`);
     if ((details.permissions || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Uprawnienia:</span> ${details.permissions.map((p) => escapeHtml(p.name)).join(', ')}</div>`);
+    if ((details.shares || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Udziały:</span> ${details.shares.map((x) => `${escapeHtml(x.name)} (${x.level === 'rw' ? 'odczyt i zapis' : 'odczyt'})`).join(', ')}</div>`);
     if ((details.addedGroups || []).length) rows.push(`<div class="mt-1"><span class="fw-semibold">Dodano do grup:</span>${formatDnList(details.addedGroups)}</div>`);
     if ((details.failedGroups || []).length) rows.push(`<div class="mt-1"><span class="text-danger fw-semibold">Nie dodano do:</span>${formatDnList(details.failedGroups.map((f) => f.groupDn))}</div>`);
   } else if (action === 'search') {
@@ -2004,7 +2010,7 @@ function updateNewUserSubmitState() {
   const step = state.newUser.step || 1;
   const nextBtn = document.getElementById('newUserNextBtn');
   if (step === 1) nextBtn.disabled = !newUserForm.querySelector('input[name="userType"]:checked');
-  if (step === 2 || step === 3) nextBtn.disabled = !isNewUserInfoValid();
+  if (step >= 2 && step < WIZARD_LAST_STEP) nextBtn.disabled = !isNewUserInfoValid();
   newUserSubmitBtn.disabled = step !== WIZARD_LAST_STEP || !isNewUserInfoValid();
   if (step === WIZARD_LAST_STEP) renderNewUserSummary();
 }
@@ -2157,12 +2163,11 @@ document.getElementById('newUserMustChangePwd').addEventListener('change', (even
 });
 
 function renderNewUserGroups() {
-  updateReferenceGroupsButton();
   if (state.newUser.step === WIZARD_LAST_STEP) renderNewUserSummary();
   const groups = Array.from(state.newUser.groups);
   document.getElementById('newUserGroupsCount').textContent = String(groups.length);
   if (!groups.length) {
-    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak dodatkowych grup. Grupy z zaznaczonych uprawnień są dodawane automatycznie.</div>';
+    newUserGroupsList.innerHTML = '<div class="chip-empty">Brak innych grup. Grupy z uprawnień i udziałów są dodawane automatycznie.</div>';
     return;
   }
   newUserGroupsList.innerHTML = groups
@@ -2203,39 +2208,106 @@ async function applyReferenceUser(item) {
   setOuFieldValue('newUserOuDn', parentDn(refDn));
   document.getElementById('newUserOuFromReference').classList.remove('d-none');
 
-  // Groups are not copied automatically; the admin adds them on demand with
-  // the "Dodaj grupy od wzorca" button.
+  // Permissions are copied only when the admin switches on the
+  // "Kopiuj uprawnienia od wzorca" toggle.
+  undoReferenceCopy();
   state.newUser.referenceGroups = toArray(data.memberOf).map(String);
-  updateReferenceGroupsButton();
+  document.getElementById('newUserCopyWrap').classList.remove('d-none');
+  if (state.newUser.copyFromRef) await applyReferenceCopy();
+  updateCopyToggle();
   updateNewUserSubmitState();
-  showToast(`Skopiowano OU od: ${name}. Grupy wzorca (${state.newUser.referenceGroups.length}) możesz dodać w sekcji Grupy.`);
+  showToast(`Skopiowano OU od: ${name}.`);
 }
 
-function updateReferenceGroupsButton() {
-  const btn = document.getElementById('newUserAddReferenceGroupsBtn');
-  const refGroups = state.newUser.referenceGroups || [];
-  const missing = refGroups.filter((g) => !state.newUser.groups.has(g)).length;
-  btn.classList.toggle('d-none', !state.newUser.referenceDn);
-  btn.disabled = !missing;
-  document.getElementById('newUserReferenceGroupsCount').textContent = String(missing);
-  btn.title = refGroups.length ? (missing ? 'Dodaj brakujące grupy użytkownika wzorcowego' : 'Wszystkie grupy wzorca są już dodane') : 'Użytkownik wzorcowy nie należy do żadnej grupy';
+// ----- Kopiowanie uprawnień od użytkownika wzorcowego -----
+// Everything added by the copy is remembered, so switching it off (or
+// changing the reference user) removes exactly what it added.
+function undoReferenceCopy() {
+  const copied = state.newUser.copied;
+  if (!copied) return;
+  copied.perms.forEach((id) => state.newUser.permissions.delete(id));
+  copied.shares.forEach((id) => state.newUser.shares.delete(id));
+  copied.groups.forEach((dn) => state.newUser.groups.delete(dn));
+  state.newUser.copied = null;
 }
 
-document.getElementById('newUserAddReferenceGroupsBtn').addEventListener('click', () => {
-  const before = state.newUser.groups.size;
-  state.newUser.referenceGroups.forEach((g) => state.newUser.groups.add(g));
+async function applyReferenceCopy() {
+  undoReferenceCopy();
+  await loadWizardCatalogs();
+  const ref = new Set((state.newUser.referenceGroups || []).map((g) => g.toLowerCase()));
+  const copied = { perms: new Set(), shares: new Set(), groups: new Set() };
+  const covered = new Set();
+
+  state.permissionCatalog.forEach((p) => {
+    if (p.groups.length && p.groups.every((g) => ref.has(g.dn.toLowerCase())) && !state.newUser.permissions.has(p.id)) {
+      state.newUser.permissions.add(p.id);
+      copied.perms.add(p.id);
+    }
+  });
+  state.shareCatalog.forEach((sh) => {
+    const level = ref.has(sh.writeGroup.dn.toLowerCase()) ? 'rw' : ref.has(sh.readGroup.dn.toLowerCase()) ? 'r' : null;
+    if (level && !state.newUser.shares.has(sh.id)) {
+      state.newUser.shares.set(sh.id, level);
+      copied.shares.add(sh.id);
+    }
+  });
+  // Only groups delivered by the selected permissions/shares are covered;
+  // any other group of the reference user goes to "Inne grupy".
+  state.permissionCatalog
+    .filter((p) => state.newUser.permissions.has(p.id))
+    .forEach((p) => p.groups.forEach((g) => covered.add(g.dn.toLowerCase())));
+  state.shareCatalog
+    .filter((sh) => state.newUser.shares.has(sh.id))
+    .forEach((sh) => {
+      covered.add(sh.readGroup.dn.toLowerCase());
+      covered.add(sh.writeGroup.dn.toLowerCase());
+    });
+  const existing = new Set([...state.newUser.groups].map((g) => g.toLowerCase()));
+  state.newUser.referenceGroups.forEach((dn) => {
+    if (!covered.has(dn.toLowerCase()) && !existing.has(dn.toLowerCase())) {
+      state.newUser.groups.add(dn);
+      copied.groups.add(dn);
+    }
+  });
+  state.newUser.copied = copied;
   renderNewUserGroups();
-  showToast(`Dodano ${state.newUser.groups.size - before} grup(y) od użytkownika wzorcowego`);
+}
+
+function updateCopyToggle() {
+  const btn = document.getElementById('newUserCopyPermsBtn');
+  const on = state.newUser.copyFromRef;
+  const c = state.newUser.copied;
+  btn.classList.toggle('active', on);
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btn.querySelector('.copy-toggle-icon').innerHTML = icon(on ? 'check' : 'copy');
+  btn.querySelector('.copy-toggle-label').textContent = on ? 'Uprawnienia wzorca zostaną skopiowane' : 'Kopiuj uprawnienia od wzorca';
+  document.getElementById('newUserCopyInfo').textContent = on && c
+    ? `Zaznaczono: ${c.perms.size} uprawnień, ${c.shares.size} udziałów, ${c.groups.size} innych grup. Możesz je zmienić w kolejnych krokach.`
+    : 'Zaznaczy w kolejnych krokach te same uprawnienia, udziały i grupy co u wzorca.';
+}
+
+document.getElementById('newUserCopyPermsBtn').addEventListener('click', async () => {
+  state.newUser.copyFromRef = !state.newUser.copyFromRef;
+  if (state.newUser.copyFromRef) await applyReferenceCopy();
+  else {
+    undoReferenceCopy();
+    renderNewUserGroups();
+  }
+  updateCopyToggle();
 });
 
 function clearReferenceUser() {
+  undoReferenceCopy();
+  state.newUser.copyFromRef = false;
   state.newUser.referenceDn = null;
   state.newUser.referenceGroups = [];
   document.getElementById('newUserReferenceDn').value = '';
   document.getElementById('newUserReferenceEmpty').classList.remove('d-none');
   document.getElementById('newUserReferenceSelected').classList.add('d-none');
   document.getElementById('newUserOuFromReference').classList.add('d-none');
-  updateReferenceGroupsButton();
+  document.getElementById('newUserCopyWrap').classList.add('d-none');
+  updateCopyToggle();
+  renderNewUserGroups();
 }
 
 const pickReferenceUser = () => openUserPicker({
@@ -2251,15 +2323,16 @@ function resetNewUserForm() {
   newUserForm.reset();
   newUserForm.querySelector('input[name="accountExpiresDate"]').disabled = true;
   newUserPassword.type = 'password';
-  state.newUser = { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), loginTouched: false };
+  state.newUser = { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), shares: new Map(), copyFromRef: false, copied: null, loginTouched: false };
   clearReferenceUser();
   setOuFieldValue('newUserOuDn', '', { silent: true });
   renderNewUserGroups();
   setNewUserLoginState('idle', '');
   showPwdOptionsHint('');
   document.getElementById('newUserPermSearch').value = '';
+  document.getElementById('newUserShareSearch').value = '';
   showNewUserStep(1);
-  loadPermissionCatalog().then(renderNewUserPermissions);
+  loadWizardCatalogs();
 }
 
 // The picker modals open on top of the wizard without hiding it, so this
@@ -2290,6 +2363,8 @@ newUserForm.addEventListener('submit', async (event) => {
     payload.accountExpiresMode = payload.accountExpiresModeNewUser || 'never';
     payload.groups = Array.from(state.newUser.groups);
     payload.permissionIds = Array.from(state.newUser.permissions);
+    payload.shareAccess = Array.from(state.newUser.shares, ([id, level]) => ({ id, level }));
+    Object.keys(payload).filter((k) => k.startsWith('share-')).forEach((k) => delete payload[k]);
     delete payload.accountExpiresModeNewUser;
     const result = await api('/api/user/create', { method: 'POST', body: JSON.stringify(payload) });
     const failed = result.failedGroups || [];
@@ -2318,8 +2393,8 @@ document.querySelectorAll('input[name="accountExpiresModeNewUser"]').forEach((ra
 });
 
 // ----- Kroki kreatora -----
-const WIZARD_NEXT_LABELS = { 1: 'Informacje o użytkowniku', 2: 'Uprawnienia użytkownika', 3: 'Podsumowanie' };
-const WIZARD_LAST_STEP = 4;
+const WIZARD_NEXT_LABELS = { 1: 'Informacje o użytkowniku', 2: 'Uprawnienia', 3: 'Udziały sieciowe', 4: 'Inne grupy', 5: 'Podsumowanie' };
+const WIZARD_LAST_STEP = 6;
 
 function showNewUserStep(step) {
   state.newUser.step = step;
@@ -2341,12 +2416,16 @@ function showNewUserStep(step) {
     renderNewUserPermissions();
     setTimeout(() => document.getElementById('newUserPermSearch').focus(), 50);
   }
+  if (step === 4) {
+    renderNewUserShares();
+    setTimeout(() => document.getElementById('newUserShareSearch').focus(), 50);
+  }
 }
 
 function goNewUserNext() {
   const step = state.newUser.step;
   if (step === 1 && newUserForm.querySelector('input[name="userType"]:checked')) showNewUserStep(2);
-  else if (step === 2 || step === 3) {
+  else if (step >= 2 && step < WIZARD_LAST_STEP) {
     if (isNewUserInfoValid()) showNewUserStep(step + 1);
     else showToast('Uzupełnij imię, nazwisko, dostępny login, hasło i OU', true);
   }
@@ -2363,6 +2442,25 @@ newUserForm.querySelectorAll('input[name="userType"]').forEach((radio) => {
 });
 
 // ----- Uprawnienia w kreatorze -----
+async function loadShareCatalog() {
+  try {
+    state.shareCatalog = await api('/api/shares');
+  } catch (error) {
+    state.shareCatalog = [];
+    showToast(`Udziały: ${error.message}`, true);
+  }
+  return state.shareCatalog;
+}
+
+let wizardCatalogsPromise = null;
+function loadWizardCatalogs() {
+  if (!wizardCatalogsPromise) {
+    wizardCatalogsPromise = Promise.all([loadPermissionCatalog(), loadShareCatalog()])
+      .finally(() => { wizardCatalogsPromise = null; });
+  }
+  return wizardCatalogsPromise;
+}
+
 async function loadPermissionCatalog() {
   try {
     state.permissionCatalog = await api('/api/permissions');
@@ -2388,7 +2486,6 @@ function renderNewUserPermissions() {
   const q = document.getElementById('newUserPermSearch').value.trim().toLowerCase();
   const catalog = state.permissionCatalog || [];
   document.getElementById('newUserPermCount').textContent = String(state.newUser.permissions.size);
-  document.getElementById('newUserPermFromReferenceBtn').classList.toggle('d-none', !state.newUser.referenceDn || !catalog.length);
   if (!catalog.length) {
     list.innerHTML = `<div class="empty-state">${icon('shield')}<div>Nie zdefiniowano jeszcze żadnych uprawnień.<br>Dodaj je w zakładce <strong>Ustawienia</strong>; do tego czasu możesz dodać grupy ręcznie.</div></div>`;
     renderNewUserSummary();
@@ -2430,22 +2527,82 @@ document.getElementById('newUserPermList').addEventListener('change', (event) =>
 });
 document.getElementById('newUserPermSearch').addEventListener('input', debounce(renderNewUserPermissions, 150));
 
-document.getElementById('newUserPermFromReferenceBtn').addEventListener('click', () => {
-  const refGroups = new Set((state.newUser.referenceGroups || []).map((g) => g.toLowerCase()));
-  const matching = state.permissionCatalog.filter((p) => p.groups.every((g) => refGroups.has(g.dn.toLowerCase())));
-  matching.forEach((p) => state.newUser.permissions.add(p.id));
-  renderNewUserPermissions();
-  showToast(matching.length
-    ? `Zaznaczono ${matching.length} uprawnień, które ma użytkownik wzorcowy`
-    : 'Użytkownik wzorcowy nie ma pełnego zestawu grup żadnego uprawnienia');
-});
+// ----- Udziały sieciowe w kreatorze -----
+const SHARE_LEVELS = { r: 'Odczyt', rw: 'Odczyt i zapis' };
 
+function shareMatches(sh, q) {
+  if (!q) return true;
+  const hay = [sh.name, sh.description, sh.path, sh.readGroup?.name, sh.writeGroup?.name, dnLabel(sh.readGroup?.dn), dnLabel(sh.writeGroup?.dn)].join(' ').toLowerCase();
+  return q.split(/\s+/).every((word) => hay.includes(word));
+}
+
+function renderNewUserShares() {
+  const list = document.getElementById('newUserShareList');
+  const q = document.getElementById('newUserShareSearch').value.trim().toLowerCase();
+  const catalog = state.shareCatalog || [];
+  document.getElementById('newUserShareCount').textContent = String(state.newUser.shares.size);
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('folder')}<div>Nie zdefiniowano jeszcze udziałów sieciowych.<br>Dodaj je w zakładce <strong>Ustawienia</strong>.</div></div>`;
+    return;
+  }
+  const visible = catalog.filter((sh) => shareMatches(sh, q));
+  if (!visible.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak udziałów pasujących do wyszukiwania.</div>';
+    return;
+  }
+  list.innerHTML = visible.map((sh) => {
+    const level = state.newUser.shares.get(sh.id) || '';
+    const opt = (value, label) => `
+      <input type="radio" class="btn-check share-level" name="share-${escapeHtml(sh.id)}" id="share-${escapeHtml(sh.id)}-${value || 'none'}" value="${value}" data-id="${escapeHtml(sh.id)}" ${level === value ? 'checked' : ''}>
+      <label for="share-${escapeHtml(sh.id)}-${value || 'none'}">${label}</label>`;
+    return `
+      <div class="perm-item share-item ${level ? 'checked' : ''}" data-id="${escapeHtml(sh.id)}">
+        <span class="share-item-icon">${icon('folder')}</span>
+        <span class="perm-item-body flex-grow-1">
+          <span class="perm-item-name">${escapeHtml(sh.name)}</span>
+          <span class="share-path font-monospace">${escapeHtml(sh.path)}</span>
+          ${sh.description ? `<span class="perm-item-desc">${escapeHtml(sh.description)}</span>` : ''}
+          <span class="perm-item-groups">
+            <span class="perm-group ${level === 'r' ? 'perm-group-on' : ''}" title="${escapeHtml(sh.readGroup.dn)}">${icon('eye')}${escapeHtml(sh.readGroup.name || dnLabel(sh.readGroup.dn))}</span>
+            <span class="perm-group ${level === 'rw' ? 'perm-group-on' : ''}" title="${escapeHtml(sh.writeGroup.dn)}">${icon('settings')}${escapeHtml(sh.writeGroup.name || dnLabel(sh.writeGroup.dn))}</span>
+          </span>
+        </span>
+        <span class="segmented segmented-sm share-levels" role="radiogroup" aria-label="Dostęp do ${escapeHtml(sh.name)}">
+          ${opt('', 'Brak')}${opt('r', 'Odczyt')}${opt('rw', 'Odczyt i zapis')}
+        </span>
+      </div>`;
+  }).join('');
+}
+
+document.getElementById('newUserShareList').addEventListener('change', (event) => {
+  const radio = event.target.closest('.share-level');
+  if (!radio) return;
+  if (radio.value) state.newUser.shares.set(radio.dataset.id, radio.value);
+  else state.newUser.shares.delete(radio.dataset.id);
+  renderNewUserShares();
+});
+document.getElementById('newUserShareSearch').addEventListener('input', debounce(renderNewUserShares, 150));
+
+function selectedShares() {
+  return (state.shareCatalog || [])
+    .filter((sh) => state.newUser.shares.has(sh.id))
+    .map((sh) => {
+      const level = state.newUser.shares.get(sh.id);
+      return { share: sh, level, group: level === 'rw' ? sh.writeGroup : sh.readGroup };
+    });
+}
+
+// Same rules as the server: permission groups + one group per share + other
+// groups; a read-write share never keeps its read-only (-r) group.
 function newUserResultingGroups() {
   const map = new Map();
   state.permissionCatalog
     .filter((p) => state.newUser.permissions.has(p.id))
     .forEach((p) => p.groups.forEach((g) => map.set(g.dn.toLowerCase(), g.dn)));
+  const shares = selectedShares();
+  shares.forEach(({ group }) => map.set(group.dn.toLowerCase(), group.dn));
   state.newUser.groups.forEach((dn) => map.set(dn.toLowerCase(), dn));
+  shares.filter((x) => x.level === 'rw').forEach(({ share }) => map.delete(share.readGroup.dn.toLowerCase()));
   return [...map.values()];
 }
 
@@ -2486,15 +2643,15 @@ function renderNewUserSummary() {
   const refName = state.newUser.referenceDn ? document.getElementById('newUserReferenceName').textContent : '';
 
   const selectedPerms = (state.permissionCatalog || []).filter((p) => state.newUser.permissions.has(p.id));
-  const permGroupKeys = new Set(selectedPerms.flatMap((p) => p.groups.map((g) => g.dn.toLowerCase())));
-  const extraGroups = [...state.newUser.groups].filter((dn) => !permGroupKeys.has(dn.toLowerCase()));
+  const shares = selectedShares();
+  const extraGroups = [...state.newUser.groups];
   const allGroups = newUserResultingGroups().sort((a, b) => dnLabel(a).localeCompare(dnLabel(b), 'pl'));
 
   const typeHtml = summarySection('Typ użytkownika', 1, `<dl class="summary-grid">${summaryRow('Typ konta', escapeHtml(USER_TYPE_LABELS[userType] || userType))}</dl>`);
 
   const infoHtml = summarySection('Informacje o użytkowniku', 2, `
     <dl class="summary-grid">
-      ${summaryRow('Użytkownik wzorcowy', refName ? escapeHtml(refName) : '')}
+      ${summaryRow('Użytkownik wzorcowy', refName ? `${escapeHtml(refName)}${state.newUser.copyFromRef ? ' <span class="badge text-bg-success fw-normal ms-1">uprawnienia skopiowane</span>' : ''}` : '')}
       ${summaryRow('Imię i nazwisko', escapeHtml(`${first} ${last}`.trim()))}
       ${summaryRow('Nazwa wyświetlana', escapeHtml(`${first} ${last}`.trim()))}
       ${summaryRow('Login (sAMAccountName)', `<span class="font-monospace">${escapeHtml(login)}</span>`)}
@@ -2520,8 +2677,20 @@ function renderNewUserSummary() {
             <div class="summary-perm-name">${escapeHtml(p.name)}${p.category ? ` <span class="text-muted fw-normal">· ${escapeHtml(p.category)}</span>` : ''}</div>
             <div class="perm-item-groups">${permissionGroupsLine(p)}</div>
           </div>`).join('')}</div>`
-      : '<div class="text-muted small">Nie wybrano uprawnień.</div>'}
-    ${extraGroups.length ? `<div class="summary-subtitle">Dodatkowe grupy (${extraGroups.length})</div><div class="chip-list">${extraGroups.map((g) => `<span class="chip chip-sm" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}</span>`).join('')}</div>` : ''}`);
+      : '<div class="text-muted small">Nie wybrano uprawnień.</div>'}`);
+
+  const sharesHtml = summarySection(`Udziały sieciowe (${shares.length})`, 4, shares.length
+    ? `<div class="summary-perms">${shares.map(({ share, level, group }) => `
+        <div class="summary-perm">
+          <div class="summary-perm-name">${escapeHtml(share.name)} <span class="badge ${level === 'rw' ? 'text-bg-warning' : 'text-bg-light border'} fw-normal ms-1">${escapeHtml(SHARE_LEVELS[level])}</span></div>
+          <div class="small font-monospace text-muted">${escapeHtml(share.path)}</div>
+          <div class="perm-item-groups mt-1"><span class="perm-group" title="${escapeHtml(group.dn)}">${icon('group')}${escapeHtml(group.name || dnLabel(group.dn))}</span></div>
+        </div>`).join('')}</div>`
+    : '<div class="text-muted small">Nie wybrano udziałów.</div>');
+
+  const otherHtml = summarySection(`Inne grupy (${extraGroups.length})`, 5, extraGroups.length
+    ? `<div class="chip-list">${extraGroups.map((g) => `<span class="chip chip-sm" title="${escapeHtml(g)}">${escapeHtml(dnLabel(g))}</span>`).join('')}</div>`
+    : '<div class="text-muted small">Brak innych grup.</div>');
 
   const groupsHtml = `
     <section class="summary-section summary-section-total">
@@ -2531,7 +2700,7 @@ function renderNewUserSummary() {
         : '<div class="text-muted small">Brak grup poza grupą podstawową domeny.</div>'}
     </section>`;
 
-  holder.innerHTML = `<div class="summary-layout"><div>${typeHtml}${infoHtml}</div><div>${permsHtml}${groupsHtml}</div></div>`;
+  holder.innerHTML = `<div class="summary-layout"><div>${typeHtml}${infoHtml}</div><div>${permsHtml}${sharesHtml}${otherHtml}${groupsHtml}</div></div>`;
 }
 
 document.getElementById('newUserFinalSummary').addEventListener('click', (event) => {
@@ -2676,7 +2845,164 @@ document.getElementById('permissionsTableBody').addEventListener('click', async 
   }
 });
 
-document.getElementById('settings-tab').addEventListener('shown.bs.tab', refreshPermissionsTable);
+// ===== Ustawienia: udziały sieciowe =====
+const shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
+const shareEdit = { r: null, rw: null };
+
+function renderSharesTable() {
+  const body = document.getElementById('sharesTableBody');
+  const q = document.getElementById('sharesSearch').value.trim().toLowerCase();
+  if (!state.shareCatalog.length) {
+    body.innerHTML = `<tr><td colspan="5"><div class="empty-state">${icon('folder')}<div>Brak zdefiniowanych udziałów. Kliknij <strong>Dodaj udział</strong>.</div></div></td></tr>`;
+    return;
+  }
+  const rows = state.shareCatalog.filter((sh) => shareMatches(sh, q));
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="5"><div class="lookup-empty">Brak udziałów pasujących do wyszukiwania.</div></td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((sh) => `
+    <tr>
+      <td><div class="fw-semibold">${escapeHtml(sh.name)}</div>${sh.description ? `<div class="small text-muted">${escapeHtml(sh.description)}</div>` : ''}</td>
+      <td class="font-monospace small text-break">${escapeHtml(sh.path)}</td>
+      <td><div class="perm-item-groups flex-column align-items-start">
+        <span class="perm-group" title="${escapeHtml(sh.readGroup.dn)}">${icon('eye')}${escapeHtml(sh.readGroup.name || dnLabel(sh.readGroup.dn))}</span>
+        <span class="perm-group" title="${escapeHtml(sh.writeGroup.dn)}">${icon('settings')}${escapeHtml(sh.writeGroup.name || dnLabel(sh.writeGroup.dn))}</span>
+      </div></td>
+      <td class="small text-muted">${escapeHtml(new Date(sh.updatedAt).toLocaleString('pl-PL'))}${sh.updatedBy ? `<div>${escapeHtml(sh.updatedBy)}</div>` : ''}</td>
+      <td class="text-end text-nowrap">
+        <button type="button" class="btn-icon share-edit" data-id="${escapeHtml(sh.id)}" title="Edytuj" aria-label="Edytuj">${icon('settings')}</button>
+        <button type="button" class="btn-icon btn-icon-danger share-delete" data-id="${escapeHtml(sh.id)}" title="Usuń" aria-label="Usuń">${icon('x')}</button>
+      </td>
+    </tr>`).join('');
+}
+
+async function refreshSharesTable() {
+  await loadShareCatalog();
+  renderSharesTable();
+}
+
+function renderShareSlots() {
+  [['r', 'shareReadSlot'], ['rw', 'shareWriteSlot']].forEach(([level, id]) => {
+    const g = shareEdit[level];
+    const suffixOk = !g || new RegExp(`-${level}$`, 'i').test(g.name || dnLabel(g.dn));
+    document.getElementById(id).innerHTML = g
+      ? `<div class="member-of-line"><span class="group-badge" title="${escapeHtml(g.dn)}">${dnChipContent(g.dn)}</span><button type="button" class="btn-icon btn-icon-sm share-slot-clear" data-level="${level}" title="Usuń" aria-label="Usuń">${icon('x')}</button></div>
+         ${suffixOk ? '' : `<div class="field-hint text-warning-emphasis">Nazwa grupy nie kończy się na „-${level}”. Upewnij się, że to właściwa grupa.</div>`}`
+      : '<div class="chip-empty py-2">Nie wybrano grupy</div>';
+  });
+}
+
+// "Kardio-Docs-r" <-> "Kardio-Docs-rw": look up the counterpart group by name.
+async function autoPairShareGroup(level, picked) {
+  const other = level === 'r' ? 'rw' : 'r';
+  if (shareEdit[other]) return;
+  const name = picked.name || dnLabel(picked.dn);
+  const base = name.replace(/-(rw|r)$/i, '');
+  if (base === name) return;
+  try {
+    const target = `${base}-${other}`.toLowerCase();
+    const rows = await api(`/api/search?q=${encodeURIComponent(`${base}-${other}`)}&type=group`);
+    const match = rows.find((row) => [row.cn, row.sAMAccountName, row.name].some((v) => String(v || '').toLowerCase() === target));
+    if (match && !shareEdit[other]) {
+      shareEdit[other] = { dn: match.dn || match.distinguishedName, name: getDisplayName(match) };
+      renderShareSlots();
+      showToast(`Dobrano automatycznie grupę ${shareEdit[other].name}`);
+    }
+  } catch {
+    // brak dopasowania nie jest błędem
+  }
+}
+
+function openShareModal(share = null) {
+  document.getElementById('shareModalTitle').textContent = share ? 'Edytuj udział sieciowy' : 'Nowy udział sieciowy';
+  document.getElementById('shareId').value = share?.id || '';
+  document.getElementById('shareName').value = share?.name || '';
+  document.getElementById('sharePath').value = share?.path || '';
+  document.getElementById('shareDescription').value = share?.description || '';
+  shareEdit.r = share?.readGroup ? { ...share.readGroup } : null;
+  shareEdit.rw = share?.writeGroup ? { ...share.writeGroup } : null;
+  renderShareSlots();
+  shareModal.show();
+}
+
+document.getElementById('shareModal').addEventListener('shown.bs.modal', (event) => {
+  if (event.target.id === 'shareModal') document.getElementById('shareName').focus();
+});
+document.getElementById('addShareBtn').addEventListener('click', () => openShareModal());
+document.getElementById('sharesSearch').addEventListener('input', debounce(renderSharesTable, 150));
+document.querySelectorAll('.share-pick').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const { level } = btn.dataset;
+    openGroupPicker((item) => {
+      const picked = { dn: item.dn || item.distinguishedName, name: getDisplayName(item) };
+      const other = shareEdit[level === 'r' ? 'rw' : 'r'];
+      if (other && other.dn.toLowerCase() === picked.dn.toLowerCase()) {
+        showToast('Ta grupa jest już wybrana jako druga grupa udziału', true);
+        return;
+      }
+      shareEdit[level] = picked;
+      renderShareSlots();
+      autoPairShareGroup(level, picked);
+    });
+  });
+});
+document.getElementById('shareForm').addEventListener('click', (event) => {
+  const btn = event.target.closest('.share-slot-clear');
+  if (!btn) return;
+  shareEdit[btn.dataset.level] = null;
+  renderShareSlots();
+});
+
+document.getElementById('shareForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const id = document.getElementById('shareId').value;
+  const payload = {
+    name: document.getElementById('shareName').value.trim(),
+    path: document.getElementById('sharePath').value.trim(),
+    description: document.getElementById('shareDescription').value.trim(),
+    readGroup: shareEdit.r,
+    writeGroup: shareEdit.rw
+  };
+  if (!payload.name || !payload.path) return showToast('Podaj nazwę i ścieżkę udziału', true);
+  if (!payload.readGroup || !payload.writeGroup) return showToast('Wybierz obie grupy: -r i -rw', true);
+  const btn = document.getElementById('shareSaveBtn');
+  try {
+    btn.disabled = true;
+    await api(id ? `/api/shares/${encodeURIComponent(id)}` : '/api/shares', { method: id ? 'PUT' : 'POST', body: JSON.stringify(payload) });
+    shareModal.hide();
+    showToast(id ? 'Zapisano udział' : 'Dodano udział');
+    await refreshSharesTable();
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+  return undefined;
+});
+
+document.getElementById('sharesTableBody').addEventListener('click', async (event) => {
+  const edit = event.target.closest('.share-edit');
+  const del = event.target.closest('.share-delete');
+  const find = (el) => state.shareCatalog.find((sh) => sh.id === el.dataset.id);
+  if (edit) openShareModal(find(edit));
+  if (del) {
+    const sh = find(del);
+    if (!sh || !window.confirm(`Usunąć udział „${sh.name}” ze słownika? Grupy w AD i istniejące konta nie zostaną zmienione.`)) return;
+    try {
+      await api(`/api/shares/${encodeURIComponent(sh.id)}`, { method: 'DELETE' });
+      showToast('Usunięto udział');
+      await refreshSharesTable();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+});
+
+document.getElementById('settings-tab').addEventListener('shown.bs.tab', () => {
+  refreshPermissionsTable();
+  refreshSharesTable();
+});
 
 // ===== Nowa grupa =====
 const newGroupName = document.getElementById('newGroupName');

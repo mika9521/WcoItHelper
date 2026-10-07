@@ -14,8 +14,10 @@
       <ol class="wizard-steps" id="newUserSteps">
         <li class="wizard-step active" data-step="1"><span class="wizard-step-num">1</span><span class="wizard-step-label">Typ użytkownika</span></li>
         <li class="wizard-step" data-step="2"><span class="wizard-step-num">2</span><span class="wizard-step-label">Informacje o użytkowniku</span></li>
-        <li class="wizard-step" data-step="3"><span class="wizard-step-num">3</span><span class="wizard-step-label">Uprawnienia użytkownika</span></li>
-        <li class="wizard-step" data-step="4"><span class="wizard-step-num">4</span><span class="wizard-step-label">Podsumowanie</span></li>
+        <li class="wizard-step" data-step="3"><span class="wizard-step-num">3</span><span class="wizard-step-label">Uprawnienia</span></li>
+        <li class="wizard-step" data-step="4"><span class="wizard-step-num">4</span><span class="wizard-step-label">Udziały sieciowe</span></li>
+        <li class="wizard-step" data-step="5"><span class="wizard-step-num">5</span><span class="wizard-step-label">Inne grupy</span></li>
+        <li class="wizard-step" data-step="6"><span class="wizard-step-num">6</span><span class="wizard-step-label">Podsumowanie</span></li>
       </ol>
 
       <div class="modal-body">
@@ -61,6 +63,13 @@
               <button type="button" class="btn btn-sm btn-outline-secondary" id="changeReferenceUserBtn">Zmień</button>
               <button type="button" class="btn btn-sm btn-outline-secondary" id="clearReferenceUserBtn" title="Usuń wzorzec" aria-label="Usuń wzorzec"><svg class="icon"><use href="#i-x"/></svg></button>
             </div>
+          </div>
+          <div class="reference-copy d-none" id="newUserCopyWrap">
+            <button type="button" class="btn btn-sm copy-toggle" id="newUserCopyPermsBtn" aria-pressed="false">
+              <span class="copy-toggle-icon"><svg class="icon"><use href="#i-copy"/></svg></span>
+              <span class="copy-toggle-label">Kopiuj uprawnienia od wzorca</span>
+            </button>
+            <span class="small text-muted" id="newUserCopyInfo">Zaznaczy w kolejnych krokach te same uprawnienia, udziały i grupy co u wzorca.</span>
           </div>
         </div>
         <input type="hidden" name="referenceUserDn" id="newUserReferenceDn" />
@@ -173,40 +182,49 @@
 
         <!-- Krok 3: uprawnienia -->
         <div class="wizard-pane d-none" data-pane="3">
-          <div class="row g-4">
-            <div class="col-lg-7">
-              <div class="d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
-                <div class="form-section-title mb-0">Uprawnienia <span class="badge rounded-pill text-bg-primary ms-1" id="newUserPermCount">0</span></div>
-                <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="newUserPermFromReferenceBtn" title="Zaznacz uprawnienia, których wszystkie grupy ma użytkownik wzorcowy"><svg class="icon"><use href="#i-copy"/></svg> Zaznacz jak u wzorca</button>
-              </div>
-              <div class="search-input-wrap mb-2">
-                <svg class="icon search-input-icon"><use href="#i-search"/></svg>
-                <input class="form-control" id="newUserPermSearch" placeholder="Szukaj uprawnienia, opisu lub grupy…" autocomplete="off" />
-              </div>
-              <div class="perm-list" id="newUserPermList"></div>
-            </div>
-            <div class="col-lg-5">
+          <div class="d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
+            <div class="form-section-title mb-0">Uprawnienia do aplikacji i systemów <span class="badge rounded-pill text-bg-primary ms-1" id="newUserPermCount">0</span></div>
+          </div>
+          <div class="search-input-wrap mb-2">
+            <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+            <input class="form-control" id="newUserPermSearch" placeholder="Szukaj uprawnienia, opisu lub grupy…" autocomplete="off" />
+          </div>
+          <div class="perm-list" id="newUserPermList"></div>
+        </div>
+
+        <!-- Krok 4: udziały sieciowe -->
+        <div class="wizard-pane d-none" data-pane="4">
+          <div class="d-flex justify-content-between align-items-center mb-2 gap-2 flex-wrap">
+            <div class="form-section-title mb-0">Udziały sieciowe <span class="badge rounded-pill text-bg-primary ms-1" id="newUserShareCount">0</span></div>
+            <div class="small text-muted">Odczyt = grupa <code>-r</code>, odczyt i zapis = grupa <code>-rw</code> (bez grupy <code>-r</code>).</div>
+          </div>
+          <div class="search-input-wrap mb-2">
+            <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+            <input class="form-control" id="newUserShareSearch" placeholder="Szukaj udziału, ścieżki lub opisu…" autocomplete="off" />
+          </div>
+          <div class="perm-list" id="newUserShareList"></div>
+        </div>
+
+        <!-- Krok 5: inne grupy -->
+        <div class="wizard-pane d-none" data-pane="5">
+          <div class="field-hint mt-0 mb-3">Dowolne grupy AD spoza słownika uprawnień i udziałów.</div>
         <!-- Grupy -->
         <div class="form-section mb-0">
           <div class="d-flex flex-column gap-2 mb-2">
-            <div class="form-section-title mb-0">Dodatkowe grupy <span class="badge rounded-pill text-bg-light border ms-1" id="newUserGroupsCount">0</span></div>
+            <div class="form-section-title mb-0">Inne grupy AD <span class="badge rounded-pill text-bg-light border ms-1" id="newUserGroupsCount">0</span></div>
             <div class="d-flex gap-2 flex-wrap">
-              <button type="button" class="btn btn-sm btn-outline-secondary d-none" id="newUserAddReferenceGroupsBtn"><svg class="icon"><use href="#i-copy"/></svg> Dodaj grupy od wzorca <span class="badge rounded-pill text-bg-light border" id="newUserReferenceGroupsCount">0</span></button>
               <button type="button" class="btn btn-sm btn-outline-primary" id="newUserAddGroupBtn"><svg class="icon"><use href="#i-plus"/></svg> Dodaj grupę</button>
             </div>
           </div>
           <div class="chip-list" id="newUserGroupsList">
-            <div class="chip-empty">Brak dodatkowych grup. Grupy z zaznaczonych uprawnień są dodawane automatycznie.</div>
+            <div class="chip-empty">Brak innych grup. Grupy z uprawnień i udziałów są dodawane automatycznie.</div>
           </div>
         </div>
 
-
-            </div>
-          </div>
         </div>
 
-        <!-- Krok 4: podsumowanie -->
-        <div class="wizard-pane d-none" data-pane="4">
+        <!-- Krok 6: podsumowanie -->
+        <div class="wizard-pane d-none" data-pane="6">
           <div class="alert alert-info small d-flex align-items-center gap-2 mb-3">
             <svg class="icon"><use href="#i-info"/></svg>
             <span>Sprawdź dane. Konto zostanie utworzone dopiero po kliknięciu <strong>Utwórz użytkownika</strong>.</span>

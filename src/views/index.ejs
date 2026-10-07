@@ -38,7 +38,7 @@
         </button>
       </li>
       <li>
-        <button class="app-nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-panel" data-page-title="Ustawienia" data-page-sub="Uprawnienia użytkowników i ich mapowanie na grupy AD" type="button" role="tab">
+        <button class="app-nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-panel" data-page-title="Ustawienia" data-page-sub="Uprawnienia i udziały sieciowe oraz ich mapowanie na grupy AD" type="button" role="tab">
           <svg class="icon"><use href="#i-settings"/></svg><span>Ustawienia</span>
         </button>
       </li>
@@ -446,12 +446,38 @@
             </div>
           </div>
           <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0" id="permissionsTable">
+            <table class="table table-hover align-middle mb-0 settings-table" id="permissionsTable">
               <thead>
                 <tr><th>Uprawnienie</th><th>Grupy AD</th><th style="width:170px;">Ostatnia zmiana</th><th style="width:110px;" class="text-end">Akcje</th></tr>
               </thead>
               <tbody id="permissionsTableBody">
                 <tr><td colspan="4"><div class="empty-state"><span class="spinner-border spinner-border-sm text-primary"></span><div>Ładowanie…</div></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card mt-4">
+          <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+              <div>Udziały sieciowe</div>
+              <div class="small text-muted fw-normal">Udziały wybierane w kroku 4 kreatora. Każdy udział ma grupę tylko do odczytu (<code>-r</code>) i grupę do odczytu i zapisu (<code>-rw</code>).</div>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="addShareBtn"><svg class="icon"><use href="#i-plus"/></svg> Dodaj udział</button>
+          </div>
+          <div class="card-body pb-2">
+            <div class="search-input-wrap" style="max-width: 420px;">
+              <svg class="icon search-input-icon"><use href="#i-search"/></svg>
+              <input class="form-control" id="sharesSearch" placeholder="Szukaj udziału, ścieżki lub grupy…" autocomplete="off" />
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0 settings-table" id="sharesTable">
+              <thead>
+                <tr><th>Udział</th><th>Ścieżka</th><th>Grupy AD</th><th style="width:170px;">Ostatnia zmiana</th><th style="width:110px;" class="text-end">Akcje</th></tr>
+              </thead>
+              <tbody id="sharesTableBody">
+                <tr><td colspan="5"><div class="empty-state"><span class="spinner-border spinner-border-sm text-primary"></span><div>Ładowanie…</div></div></td></tr>
               </tbody>
             </table>
           </div>
@@ -467,6 +493,7 @@
 <%- include('modals/ouPickerModal') %>
 <%- include('modals/groupToolsModals') %>
 <%- include('modals/permissionModal') %>
+<%- include('modals/shareModal') %>
 
 <div class="toast-container position-fixed bottom-0 end-0 p-3">
   <div id="appToast" class="toast app-toast align-items-center border-0" role="alert">

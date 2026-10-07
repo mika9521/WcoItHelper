@@ -29,7 +29,12 @@ const {
   createPermission,
   updatePermission,
   deletePermission,
-  getPermissionsByIds
+  getPermissionsByIds,
+  listShares,
+  createShare,
+  updateShare,
+  deleteShare,
+  resolveShareAccess
 } = require('../services/permissions/permissionService');
 const {
   logEvent,
@@ -540,11 +545,15 @@ router.post('/api/user/create', async (req, res) => {
     // Permissions are resolved to groups here (not trusted from the client),
     // then merged with any additional groups picked in the wizard.
     const permissions = await getPermissionsByIds(req.body?.permissionIds);
+    const shareAccess = await resolveShareAccess(req.body?.shareAccess);
     const groupMap = new Map();
     permissions.forEach((p) => p.groups.forEach((g) => groupMap.set(g.dn.toLowerCase(), g.dn)));
+    shareAccess.forEach(({ group }) => groupMap.set(group.dn.toLowerCase(), group.dn));
     (Array.isArray(req.body?.groups) ? req.body.groups : []).forEach((dn) => {
       if (dn) groupMap.set(String(dn).toLowerCase(), String(dn));
     });
+    // A read-write share never comes with its read-only group as well.
+    shareAccess.filter((a) => a.level === 'rw').forEach(({ share }) => groupMap.delete(share.readGroup.dn.toLowerCase()));
     const result = await createUser({ ...req.body, groups: [...groupMap.values()] }, adAuthFromRequest(req));
     await audit(req, {
       action: 'user_create',
@@ -559,6 +568,7 @@ router.post('/api/user/create', async (req, res) => {
         userType: req.body?.userType || '',
         referenceUserDn: req.body?.referenceUserDn || '',
         permissions: permissions.map((p) => ({ id: p.id, name: p.name })),
+        shares: shareAccess.map(({ share, level, group }) => ({ id: share.id, name: share.name, path: share.path, level, groupDn: group.dn })),
         settings: result?.settings || {},
         addedGroups: result?.addedGroups || [],
         failedGroups: result?.failedGroups || []
@@ -576,60 +586,54 @@ router.post('/api/user/create', async (req, res) => {
   }
 });
 
-router.get('/api/permissions', async (req, res) => {
-  try {
-    res.json(await listPermissions());
-  } catch (error) {
-    res.status(error.status || 500).json({ message: error.message });
-  }
-});
+function registerCrudRoutes(basePath, auditPrefix, label, store) {
+  router.get(basePath, async (req, res) => {
+    try {
+      res.json(await store.list());
+    } catch (error) {
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
 
-router.post('/api/permissions', async (req, res) => {
-  try {
-    const permission = await createPermission(req.body, req.session?.user?.login || '');
-    await audit(req, {
-      action: 'permission_create',
-      status: 'success',
-      message: `Dodano uprawnienie „${permission.name}”`,
-      details: { permission }
-    });
-    res.json(permission);
-  } catch (error) {
-    await audit(req, { action: 'permission_create', status: 'error', message: error.message, details: { payload: req.body } });
-    res.status(error.status || 500).json({ message: error.message });
-  }
-});
+  router.post(basePath, async (req, res) => {
+    try {
+      const item = await store.create(req.body, req.session?.user?.login || '');
+      await audit(req, { action: `${auditPrefix}_create`, status: 'success', message: `Dodano ${label} „${item.name}”`, details: { item } });
+      res.json(item);
+    } catch (error) {
+      await audit(req, { action: `${auditPrefix}_create`, status: 'error', message: error.message, details: { payload: req.body } });
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
 
-router.put('/api/permissions/:id', async (req, res) => {
-  try {
-    const { before, after } = await updatePermission(req.params.id, req.body, req.session?.user?.login || '');
-    await audit(req, {
-      action: 'permission_update',
-      status: 'success',
-      message: `Zmieniono uprawnienie „${after.name}”`,
-      details: { before, after }
-    });
-    res.json(after);
-  } catch (error) {
-    await audit(req, { action: 'permission_update', status: 'error', message: error.message, details: { id: req.params.id } });
-    res.status(error.status || 500).json({ message: error.message });
-  }
-});
+  router.put(`${basePath}/:id`, async (req, res) => {
+    try {
+      const { before, after } = await store.update(req.params.id, req.body, req.session?.user?.login || '');
+      await audit(req, { action: `${auditPrefix}_update`, status: 'success', message: `Zmieniono ${label} „${after.name}”`, details: { before, after } });
+      res.json(after);
+    } catch (error) {
+      await audit(req, { action: `${auditPrefix}_update`, status: 'error', message: error.message, details: { id: req.params.id } });
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
 
-router.delete('/api/permissions/:id', async (req, res) => {
-  try {
-    const permission = await deletePermission(req.params.id);
-    await audit(req, {
-      action: 'permission_delete',
-      status: 'success',
-      message: `Usunięto uprawnienie „${permission.name}”`,
-      details: { permission }
-    });
-    res.json({ deleted: true });
-  } catch (error) {
-    await audit(req, { action: 'permission_delete', status: 'error', message: error.message, details: { id: req.params.id } });
-    res.status(error.status || 500).json({ message: error.message });
-  }
+  router.delete(`${basePath}/:id`, async (req, res) => {
+    try {
+      const item = await store.remove(req.params.id);
+      await audit(req, { action: `${auditPrefix}_delete`, status: 'success', message: `Usunięto ${label} „${item.name}”`, details: { item } });
+      res.json({ deleted: true });
+    } catch (error) {
+      await audit(req, { action: `${auditPrefix}_delete`, status: 'error', message: error.message, details: { id: req.params.id } });
+      res.status(error.status || 500).json({ message: error.message });
+    }
+  });
+}
+
+registerCrudRoutes('/api/permissions', 'permission', 'uprawnienie', {
+  list: listPermissions, create: createPermission, update: updatePermission, remove: deletePermission
+});
+registerCrudRoutes('/api/shares', 'share', 'udział', {
+  list: listShares, create: createShare, update: updateShare, remove: deleteShare
 });
 
 router.get('/api/reports/stale-logons', async (req, res) => {

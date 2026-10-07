@@ -939,8 +939,6 @@ pre.json-view {
 .perm-group { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.72rem; color: #3730a3; background: #ecebfd; border-radius: 999px; padding: 0.1rem 0.5rem; }
 .perm-summary { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.85rem 1rem; background: var(--ink-50); }
 .chip-sm { font-size: 0.74rem; padding: 0.15rem 0.55rem; }
-#permissionsTable thead th:first-child, #permissionsTable tbody td:first-child { padding-left: 1.1rem; }
-#permissionsTable thead th:last-child, #permissionsTable tbody td:last-child { padding-right: 1.1rem; }
 
 /* ----- Kreator: podsumowanie ----- */
 .summary-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 1rem; align-items: start; }
@@ -958,3 +956,28 @@ pre.json-view {
 .summary-perms { display: flex; flex-direction: column; gap: 0.5rem; }
 .summary-perm { border-left: 3px solid var(--accent); padding-left: 0.6rem; }
 .summary-perm-name { font-weight: 600; font-size: 0.86rem; margin-bottom: 0.2rem; }
+
+.settings-table thead th:first-child, .settings-table tbody td:first-child { padding-left: 1.1rem; }
+.settings-table thead th:last-child, .settings-table tbody td:last-child { padding-right: 1.1rem; }
+
+/* ----- Kreator: kopiowanie od wzorca ----- */
+.reference-copy { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px dashed rgba(var(--accent-rgb), 0.3); }
+.copy-toggle {
+  --bs-btn-color: var(--success); --bs-btn-border-color: #86d19f; --bs-btn-bg: var(--surface);
+  --bs-btn-hover-color: var(--success); --bs-btn-hover-bg: var(--success-soft); --bs-btn-hover-border-color: var(--success);
+  --bs-btn-active-color: #fff; --bs-btn-active-bg: #16a34a; --bs-btn-active-border-color: #16a34a;
+  font-weight: 600;
+}
+.copy-toggle.active { color: #fff; background: #16a34a; border-color: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.25); }
+.copy-toggle-icon { display: inline-grid; place-items: center; }
+
+/* ----- Kreator: udziały ----- */
+.share-item { align-items: center; cursor: default; }
+.share-item-icon { width: 2.1rem; height: 2.1rem; border-radius: 8px; display: grid; place-items: center; background: #fdf1dc; color: #b45309; flex: 0 0 auto; }
+.share-path { font-size: 0.78rem; color: var(--ink-700); }
+.segmented-sm label { padding: 0.28rem 0.65rem; font-size: 0.78rem; }
+.share-levels { flex: 0 0 auto; }
+.share-levels .btn-check[value="rw"]:checked + label { color: #a16207; }
+.perm-group-on { background: #dcfce7; color: var(--success); font-weight: 600; }
+.share-group-slot .member-of-line { margin: 0; }
+@media (max-width: 760px) { .share-item { flex-wrap: wrap; } }
