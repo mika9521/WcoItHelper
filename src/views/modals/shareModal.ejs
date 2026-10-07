@@ -27,16 +27,23 @@
             <textarea class="form-control" id="shareDescription" rows="2" maxlength="1000" placeholder="Co znajduje się w udziale i komu się go nadaje"></textarea>
           </div>
           <div class="col-md-6">
-            <label class="form-label">Grupa: tylko odczyt (<code>-r</code>) <span class="text-danger">*</span></label>
+            <label class="form-label">Grupa: tylko odczyt (<code>-r</code>)</label>
             <div class="share-group-slot" id="shareReadSlot"></div>
             <button type="button" class="btn btn-sm btn-outline-primary mt-2 share-pick" data-level="r"><svg class="icon"><use href="#i-search"/></svg> Wybierz grupę -r</button>
           </div>
           <div class="col-md-6">
-            <label class="form-label">Grupa: odczyt i zapis (<code>-rw</code>) <span class="text-danger">*</span></label>
+            <label class="form-label">Grupa: odczyt i zapis (<code>-rw</code>)</label>
             <div class="share-group-slot" id="shareWriteSlot"></div>
             <button type="button" class="btn btn-sm btn-outline-primary mt-2 share-pick" data-level="rw"><svg class="icon"><use href="#i-search"/></svg> Wybierz grupę -rw</button>
           </div>
-          <div class="col-12"><div class="field-hint mt-0" id="shareGroupsHint">Po wybraniu jednej grupy portal spróbuje sam dobrać drugą (ta sama nazwa z końcówką -r / -rw).</div></div>
+          <div class="col-12">
+            <label class="form-label mb-1">Dostępne dla typów kont</label>
+            <div class="d-flex gap-3 flex-wrap">
+              <div class="form-check m-0"><input class="form-check-input share-type" type="checkbox" value="eskulap-domain" id="shareTypeDomain" checked><label class="form-check-label" for="shareTypeDomain">Użytkownik domeny Eskulap</label></div>
+              <div class="form-check m-0"><input class="form-check-input share-type" type="checkbox" value="service" id="shareTypeService" checked><label class="form-check-label" for="shareTypeService">Konto serwisowe</label></div>
+            </div>
+          </div>
+          <div class="col-12"><div class="field-hint mt-0" id="shareGroupsHint">Wymagana jest co najmniej jedna grupa. Gdy udział ma tylko jedną (np. tylko -rw), w kreatorze będzie wybór między „Brak” a tym dostępem. Po wybraniu jednej grupy portal spróbuje sam dobrać drugą (ta sama nazwa z końcówką -r / -rw).</div></div>
         </div>
       </div>
       <div class="modal-footer">

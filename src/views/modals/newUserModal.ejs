@@ -35,6 +35,13 @@
               <span class="user-type-desc">Standardowe konto domenowe: logowanie do komputerów, poczta i zasoby sieciowe zgodnie z uprawnieniami.</span>
               <span class="user-type-check"><svg class="icon"><use href="#i-check"/></svg></span>
             </label>
+            <label class="user-type-card">
+              <input type="radio" name="userType" value="service" class="user-type-input">
+              <span class="user-type-icon user-type-icon-service"><svg class="icon"><use href="#i-settings"/></svg></span>
+              <span class="user-type-title">Konto serwisowe</span>
+              <span class="user-type-desc">Konto dla aplikacji lub usługi. Login w formacie <code>svc_nazwa</code>, tworzone zawsze w OU kont serwisowych z Ustawień.</span>
+              <span class="user-type-check"><svg class="icon"><use href="#i-check"/></svg></span>
+            </label>
           </div>
         </div>
 
@@ -74,8 +81,16 @@
         </div>
         <input type="hidden" name="referenceUserDn" id="newUserReferenceDn" />
 
+        <!-- Konto serwisowe: nazwa -->
+        <div class="form-section d-none" data-type-only="service">
+          <div class="form-section-title">Konto serwisowe</div>
+          <label class="form-label" for="newUserServiceName">Nazwa konta / usługi <span class="text-danger">*</span></label>
+          <input class="form-control" id="newUserServiceName" placeholder="np. Backup SQL" maxlength="64" />
+          <div class="field-hint">Używana jako nazwa wyświetlana; login powstaje automatycznie jako <code>svc_nazwa</code>.</div>
+        </div>
+
         <!-- Dane osobowe -->
-        <div class="form-section">
+        <div class="form-section" data-type-only="eskulap-domain">
           <div class="form-section-title">Dane osobowe</div>
           <div class="row g-3">
             <div class="col-md-6">
@@ -142,6 +157,7 @@
             </button>
           </div>
           <div class="field-hint d-none" id="newUserOuFromReference">Skopiowano z użytkownika wzorcowego.</div>
+          <div class="field-hint d-none" id="newUserOuLocked">Konta serwisowe są zawsze tworzone w OU wskazanym w Ustawieniach.</div>
         </div>
 
         <!-- Zaawansowane -->

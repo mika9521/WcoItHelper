@@ -352,9 +352,11 @@ async function createUser(payload, authContext = null) {
   const login = String(payload.login || '').trim();
   const groups = Array.isArray(payload.groups) ? payload.groups.filter(Boolean) : [];
 
+  const isService = payload.accountType === 'service';
   if (!login) throw new AppError('Brak loginu użytkownika', 400);
   if (!ouDn) throw new AppError('Nie wybrano docelowego OU', 400);
-  if (!firstName || !lastName) throw new AppError('Imię i nazwisko są wymagane', 400);
+  if (!isService && (!firstName || !lastName)) throw new AppError('Imię i nazwisko są wymagane', 400);
+  if (isService && !String(payload.displayName || '').trim()) throw new AppError('Nazwa konta serwisowego jest wymagana', 400);
   if (!password) throw new AppError('Hasło jest wymagane', 400);
   if (!isConnectionEncrypted()) {
     throw new AppError('Portal łączy się z AD bez szyfrowania, a AD pozwala ustawić hasło tylko przez LDAPS lub StartTLS. Ustaw AD_PROTOCOL=ldaps (port 636) albo AD_TLS_ENABLED=true i uruchom portal ponownie. Konto nie zostało utworzone.', 400);
@@ -375,7 +377,7 @@ async function createUser(payload, authContext = null) {
   if (accountDisabled) userAccountControl |= UAC.ACCOUNTDISABLE;
   if (passwordNeverExpires) userAccountControl |= UAC.DONT_EXPIRE_PASSWORD;
 
-  const displayName = `${firstName} ${lastName}`;
+  const displayName = isService ? String(payload.displayName).trim() : `${firstName} ${lastName}`;
   // The AD object name (cn / RDN, the "Name" column in ADUC) is the login,
   // e.g. "kowalski.j", not the full name. Creating it under the login right
   // away (instead of creating "Jan Kowalski" and renaming it) also avoids a
@@ -389,8 +391,6 @@ async function createUser(payload, authContext = null) {
   const attributes = [
     attr('objectClass', ['top', 'person', 'organizationalPerson', 'user']),
     attr('cn', login),
-    attr('givenName', firstName),
-    attr('sn', lastName),
     attr('displayName', displayName),
     attr('sAMAccountName', login),
     attr('userPrincipalName', `${login}@${getDomainFromBaseDn()}`),
@@ -398,6 +398,8 @@ async function createUser(payload, authContext = null) {
     attr('userAccountControl', String(userAccountControl)),
     attr('accountExpires', accountExpires)
   ];
+  if (firstName) attributes.push(attr('givenName', firstName));
+  if (lastName) attributes.push(attr('sn', lastName));
   if (description) attributes.push(attr('description', description));
 
   return withAdaptiveBind(authContext, async (client) => {
@@ -819,7 +821,7 @@ async function searchOus(query, authContext = null) {
 
 async function getDashboardStats(authContext = null) {
   return withAdaptiveBind(authContext, async (client) => {
-    const runCount = async (filter) => {
+    const runSearch = async (filter) => {
       const { searchEntries } = await client.search(env.ad.baseDn, {
         scope: 'sub',
         filter,
@@ -827,20 +829,29 @@ async function getDashboardStats(authContext = null) {
         paged: true,
         sizeLimit: 0
       });
-      return searchEntries.length;
+      return searchEntries;
     };
+    const runCount = async (filter) => (await runSearch(filter)).length;
+    // AD does not support substring filters on distinguishedName, so the
+    // "outside OU zablokowane_konta" part is applied to the returned DNs.
+    const blockedSuffix = `,${BLOCKED_ACCOUNTS_OU_DN}`.toLowerCase();
+    const countOutsideBlockedOu = async (filter) => (await runSearch(filter))
+      .filter((e) => !String(e.dn || '').toLowerCase().endsWith(blockedSuffix)).length;
 
-    const blockedOu = escapeFilter(BLOCKED_ACCOUNTS_OU_DN);
-    const activeUsersFilter = '(&(objectClass=user)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))';
-    const activeUsersWithoutBlockedOuFilter = `(&${activeUsersFilter}(!(distinguishedName=*,${blockedOu})))`;
+    const enabled = '(!(userAccountControl:1.2.840.113556.1.4.803:=2))';
+    const staleFilter = (days) => `(|(!(lastLogonTimestamp=*))(lastLogonTimestamp<=${daysAgoFileTime(days)}))(whenCreated<=${toGeneralizedTime(new Date(Date.now() - days * 86400000))})`;
+    const usersFilter = SEARCH_TYPE_FILTERS.user;
+    const activeUsersFilter = `(&${usersFilter}${enabled})`;
 
-    const [users, groups, computers, ous, activeUsers, activeUsersWithoutBlockedOu] = await Promise.all([
-      runCount('(objectClass=user)'),
+    const [users, groups, computers, ous, activeUsers, activeUsersWithoutBlockedOu, staleUsers2y, staleComputers1y] = await Promise.all([
+      runCount(usersFilter),
       runCount('(objectClass=group)'),
       runCount('(objectClass=computer)'),
       runCount('(objectClass=organizationalUnit)'),
       runCount(activeUsersFilter),
-      runCount(activeUsersWithoutBlockedOuFilter)
+      countOutsideBlockedOu(activeUsersFilter),
+      countOutsideBlockedOu(`(&${usersFilter}${enabled}${staleFilter(730)})`),
+      runCount(`(&(objectClass=computer)${enabled}${staleFilter(365)})`)
     ]);
 
     return {
@@ -850,6 +861,8 @@ async function getDashboardStats(authContext = null) {
       ous,
       activeUsers,
       activeUsersWithoutBlockedOu,
+      staleUsers2y,
+      staleComputers1y,
       total: users + groups + computers
     };
   });

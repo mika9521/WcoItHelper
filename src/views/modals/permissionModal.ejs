@@ -28,6 +28,13 @@
             <textarea class="form-control" id="permissionDescription" rows="3" maxlength="1000" placeholder="Co daje to uprawnienie i komu się je nadaje"></textarea>
           </div>
           <div class="col-12">
+            <label class="form-label mb-1">Dostępne dla typów kont</label>
+            <div class="d-flex gap-3 flex-wrap">
+              <div class="form-check m-0"><input class="form-check-input permission-type" type="checkbox" value="eskulap-domain" id="permissionTypeDomain" checked><label class="form-check-label" for="permissionTypeDomain">Użytkownik domeny Eskulap</label></div>
+              <div class="form-check m-0"><input class="form-check-input permission-type" type="checkbox" value="service" id="permissionTypeService" checked><label class="form-check-label" for="permissionTypeService">Konto serwisowe</label></div>
+            </div>
+          </div>
+          <div class="col-12">
             <div class="d-flex justify-content-between align-items-center mb-2">
               <label class="form-label mb-0">Grupy AD <span class="text-danger">*</span></label>
               <button type="button" class="btn btn-sm btn-outline-primary" id="permissionAddGroupBtn"><svg class="icon"><use href="#i-plus"/></svg> Wybierz grupę</button>

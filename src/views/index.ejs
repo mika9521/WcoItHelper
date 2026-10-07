@@ -114,6 +114,22 @@
             <div class="kpi-card"><span class="kpi-icon kpi-amber"><svg class="icon"><use href="#i-folder"/></svg></span>
               <div><div class="kpi-label">Jednostki organizacyjne</div><div class="kpi-value" id="statOus">–</div></div></div>
           </div>
+          <div class="col-sm-6 col-xl-6">
+            <button type="button" class="kpi-card kpi-card-link" data-stale-report="stale-users" title="Otwórz raport nieaktywnych użytkowników">
+              <span class="kpi-icon kpi-red"><svg class="icon"><use href="#i-clock"/></svg></span>
+              <div class="text-start"><div class="kpi-label">Konta bez logowania od 2 lat</div><div class="kpi-value" id="statStaleUsers">–</div>
+              <div class="kpi-hint">włączone, poza OU zablokowane_konta</div></div>
+              <svg class="icon kpi-link-caret"><use href="#i-chevron-right"/></svg>
+            </button>
+          </div>
+          <div class="col-sm-6 col-xl-6">
+            <button type="button" class="kpi-card kpi-card-link" data-stale-report="stale-computers" title="Otwórz raport nieaktywnych komputerów">
+              <span class="kpi-icon kpi-orange"><svg class="icon"><use href="#i-computer"/></svg></span>
+              <div class="text-start"><div class="kpi-label">Komputery bez logowania od roku</div><div class="kpi-value" id="statStaleComputers">–</div>
+              <div class="kpi-hint">włączone konta komputerów</div></div>
+              <svg class="icon kpi-link-caret"><use href="#i-chevron-right"/></svg>
+            </button>
+          </div>
         </div>
 
         <div class="row g-3">
@@ -431,6 +447,27 @@
       </section>
       <!-- ===== Ustawienia ===== -->
       <section class="tab-pane fade" id="settings-panel" role="tabpanel" aria-labelledby="settings-tab">
+        <section class="card mb-4">
+          <div class="card-header">
+            <div>Konta serwisowe</div>
+            <div class="small text-muted fw-normal">Konta serwisowe (login <code>svc_nazwa</code>) są zawsze tworzone w tym OU.</div>
+          </div>
+          <div class="card-body">
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+              <div class="ou-field flex-grow-1" data-target-input="settingsServiceOuDn" style="min-width: 280px;">
+                <input type="hidden" id="settingsServiceOuDn" />
+                <button type="button" class="ou-field-btn pick-ou-btn" data-target-input="settingsServiceOuDn">
+                  <svg class="icon"><use href="#i-folder"/></svg>
+                  <span class="ou-field-text" data-placeholder="Wybierz OU dla kont serwisowych…">Wybierz OU dla kont serwisowych…</span>
+                  <svg class="icon ou-field-caret"><use href="#i-chevron-down"/></svg>
+                </button>
+              </div>
+              <button type="button" class="btn btn-primary" id="saveServiceOuBtn" disabled>Zapisz</button>
+            </div>
+            <div class="field-hint" id="settingsServiceOuInfo"></div>
+          </div>
+        </section>
+
         <section class="card">
           <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
             <div>

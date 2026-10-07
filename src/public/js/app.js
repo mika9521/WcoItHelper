@@ -50,6 +50,7 @@ const state = {
   newUser: { step: 1, referenceDn: null, referenceGroups: [], groups: new Set(), permissions: new Set(), shares: new Map(), copyFromRef: false, copied: null, loginTouched: false },
   permissionCatalog: [],
   shareCatalog: [],
+  portalSettings: { serviceAccountOuDn: '' },
   softDeleteTargetDn: null,
   unlockTargetDn: null,
   certificates: [],
@@ -218,6 +219,10 @@ function isInBlockedOu(item) {
 function formatAdDate(raw) {
   if (!raw) return '-';
   const s = String(raw);
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString('pl-PL');
+  }
   if (/^\d{14}\.0Z$/.test(s)) {
     const d = new Date(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}T${s.slice(8, 10)}:${s.slice(10, 12)}:${s.slice(12, 14)}Z`);
     return d.toLocaleString('pl-PL');
@@ -635,6 +640,8 @@ function userTemplate(data) {
     { id: 'u-data', title: 'Dane', content: userDataTemplate(data) },
     { id: 'u-settings', title: 'Ustawienia', content: userSettingsTemplate(data) },
     { id: 'u-memberof', title: 'Członek grup', content: memberOfTemplate(data) },
+    { id: 'u-perms', title: 'Uprawnienia', content: objectAccessTemplate('perms') },
+    { id: 'u-shares', title: 'Udziały sieciowe', content: objectAccessTemplate('shares') },
     { id: 'u-certs', title: 'Certyfikaty', content: certificatesTemplate(data.distinguishedName || data.dn) },
     { id: 'u-logs', title: 'Logi', content: auditLogsTemplate(data.distinguishedName || data.dn, 'user') },
     { id: 'u-dev', title: 'DEV', content: devTemplate(data) }
@@ -697,6 +704,21 @@ function ouTemplate(data) {
 function auditLogsTemplate(dn, type) {
   return `
     <div class="small text-muted mb-2">Historia zmian i działań z portalu dla obiektu typu ${escapeHtml(type)}.</div>
+    <div class="log-filters">
+      <div class="search-input-wrap flex-grow-1">
+        ${icon('search', 'search-input-icon')}
+        <input class="form-control form-control-sm" id="objectLogSearch" placeholder="Szukaj: użytkownik, opis, grupa…" autocomplete="off" />
+      </div>
+      <select class="form-select form-select-sm w-auto" id="objectLogAction"><option value="">Wszystkie akcje</option></select>
+      <select class="form-select form-select-sm w-auto" id="objectLogStatus">
+        <option value="">Każdy status</option><option value="success">success</option><option value="error">error</option>
+      </select>
+      <div class="form-check form-switch m-0">
+        <input class="form-check-input" type="checkbox" id="objectLogShowViews">
+        <label class="form-check-label small" for="objectLogShowViews">Pokaż podglądy</label>
+      </div>
+    </div>
+    <div class="small text-muted mb-2" id="objectLogInfo"></div>
     <div class="audit-object-logs" data-dn="${escapeHtml(dn || '')}">Ładowanie logów…</div>
   `;
 }
@@ -754,7 +776,7 @@ function formatAuditDetails(event) {
   } else if (action === 'share_create' || action === 'share_delete' || action === 'share_update') {
     const sh = details.item || details.after || {};
     rows.push(`<div class="mt-1"><span class="fw-semibold">${escapeHtml(sh.name || '-')}</span> <code class="small">${escapeHtml(sh.path || '')}</code></div>`);
-    rows.push(`<div class="mt-1 small">-r: ${escapeHtml(dnLabel(sh.readGroup?.dn))} · -rw: ${escapeHtml(dnLabel(sh.writeGroup?.dn))}</div>`);
+    rows.push(`<div class="mt-1 small">-r: ${escapeHtml(sh.readGroup?.dn ? dnLabel(sh.readGroup.dn) : '—')} · -rw: ${escapeHtml(sh.writeGroup?.dn ? dnLabel(sh.writeGroup.dn) : '—')}</div>`);
   } else if (action === 'permission_update') {
     const before = (details.before?.groups || []).map((g) => g.dn);
     const after = (details.after?.groups || []).map((g) => g.dn);
@@ -809,17 +831,58 @@ function formatAuditEventLine(event) {
   `;
 }
 
+const objectLogs = { rows: [], hidden: 0 };
+
+// "View" entries (Podgląd szczegółów obiektu, certyfikatów, kluczy BitLocker)
+// are hidden by default; the server filters them out before applying the limit.
+function renderObjectLogs() {
+  const holder = document.querySelector('.audit-object-logs');
+  if (!holder) return;
+  const q = (document.getElementById('objectLogSearch')?.value || '').trim().toLowerCase();
+  const action = document.getElementById('objectLogAction')?.value || '';
+  const status = document.getElementById('objectLogStatus')?.value || '';
+  const rows = objectLogs.rows.filter((e) => (!action || e.action === action)
+    && (!status || e.status === status)
+    && (!q || JSON.stringify([e.actorLogin, e.actorDisplayName, e.action, e.message, e.details, e.targetDn]).toLowerCase().includes(q)));
+  const showViews = document.getElementById('objectLogShowViews')?.checked;
+  const info = document.getElementById('objectLogInfo');
+  if (info) {
+    info.textContent = `Wyświetlono ${rows.length} z ${objectLogs.rows.length} wpisów`
+      + (!showViews && objectLogs.hidden ? ` · ukryto ${objectLogs.hidden} wpisów podglądu` : '');
+  }
+  holder.innerHTML = rows.length
+    ? rows.map((event) => formatAuditEventLine(event)).join('')
+    : `<div class="text-muted small">${objectLogs.rows.length ? 'Brak wpisów pasujących do filtrów.' : 'Brak logów dla tego obiektu.'}</div>`;
+}
+
 async function loadObjectAuditLogs(objectDn) {
   const holder = document.querySelector('.audit-object-logs');
   if (!holder || !objectDn) return;
+  const showViews = document.getElementById('objectLogShowViews')?.checked;
   try {
-    const rows = await api(`/api/audit/object-logs?dn=${encodeURIComponent(objectDn)}&limit=200`);
-    holder.innerHTML = rows.length
-      ? rows.map((event) => formatAuditEventLine(event)).join('')
-      : '<div class="text-muted small">Brak logów dla tego obiektu.</div>';
+    const data = await api(`/api/audit/object-logs?dn=${encodeURIComponent(objectDn)}&limit=500&hideViews=${showViews ? '0' : '1'}`);
+    objectLogs.rows = Array.isArray(data) ? data : (data.rows || []);
+    objectLogs.hidden = data.hidden || 0;
+    const select = document.getElementById('objectLogAction');
+    if (select) {
+      const current = select.value;
+      const actions = [...new Set(objectLogs.rows.map((e) => e.action).filter(Boolean))].sort();
+      select.innerHTML = '<option value="">Wszystkie akcje</option>' + actions.map((a) => `<option value="${escapeHtml(a)}" ${a === current ? 'selected' : ''}>${escapeHtml(a)}</option>`).join('');
+    }
+    renderObjectLogs();
   } catch (error) {
     holder.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
   }
+}
+
+function bindObjectLogFilters() {
+  const search = document.getElementById('objectLogSearch');
+  if (!search || search.dataset.bound) return;
+  search.dataset.bound = '1';
+  search.addEventListener('input', debounce(renderObjectLogs, 150));
+  document.getElementById('objectLogAction').addEventListener('change', renderObjectLogs);
+  document.getElementById('objectLogStatus').addEventListener('change', renderObjectLogs);
+  document.getElementById('objectLogShowViews').addEventListener('change', () => loadObjectAuditLogs(state.currentObjectDn));
 }
 
 async function copyTextToClipboard(text) {
@@ -1133,8 +1196,15 @@ async function openObject(dn, typeHint) {
           : userTemplate(data);
     state.currentObjectDn = data.distinguishedName || data.dn || dn;
     state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), addMembers: new Set(), removeMembers: new Set(), moveTargetDn: null };
+    state.objectOriginalGroups = new Map(toArray(data.memberOf).map((g) => [String(g).toLowerCase(), String(g)]));
+    state.objectAccountType = String(toArray(data.sAMAccountName)[0] || '').toLowerCase().startsWith('svc_') ? 'service' : 'eskulap-domain';
     applyObjectChangesBtn.classList.remove('d-none');
+    updatePendingChangesInfo();
     bindModalActions();
+    if (type === 'user') {
+      await loadWizardCatalogs();
+      renderObjectAccess();
+    }
     await loadObjectAuditLogs(state.currentObjectDn);
     if (type === 'computer') await loadBitlockerKeys(state.currentObjectDn);
     if (type === 'user') await loadUserCertificates(state.currentObjectDn);
@@ -1149,7 +1219,9 @@ function openMoveOnly(dn, label) {
   objectBody.innerHTML = moveTemplate(dn);
   state.currentObjectDn = dn;
   state.pendingChanges = { addGroups: new Set(), removeGroups: new Set(), moveTargetDn: null };
+  state.objectOriginalGroups = new Map();
   applyObjectChangesBtn.classList.remove('d-none');
+  updatePendingChangesInfo();
   bindModalActions();
   objectModal.show();
 }
@@ -1308,10 +1380,10 @@ function bindModalActions() {
     if (btn.dataset.bound) return;
     btn.dataset.bound = '1';
     btn.addEventListener('click', () => {
-      const groupDn = btn.dataset.groupdn;
-      state.pendingChanges.removeGroups.add(groupDn);
-      state.pendingChanges.addGroups.delete(groupDn);
-      btn.closest('.member-of-line')?.classList.add('pending-removal');
+      // X on a line marked for removal restores it.
+      const restoring = btn.closest('.member-of-line')?.classList.contains('pending-removal');
+      setGroupMembership(btn.dataset.groupdn, restoring);
+      refreshObjectAccess();
     });
   });
 
@@ -1368,6 +1440,7 @@ function bindModalActions() {
     }
   });
 
+  bindObjectLogFilters();
   bindOuPickers();
 }
 
@@ -1643,16 +1716,248 @@ document.getElementById('groupSearchModal').addEventListener('shown.bs.modal', (
 document.getElementById('referenceUserModal').addEventListener('shown.bs.modal', () => document.getElementById('referenceLookupInput').focus());
 document.getElementById('addMemberModal').addEventListener('shown.bs.modal', () => document.getElementById('memberLookupInput').focus());
 
-function addPendingGroupToObject(item) {
-  const pickedDn = item.dn || item.distinguishedName;
-  state.pendingChanges.addGroups.add(pickedDn);
-  state.pendingChanges.removeGroups.delete(pickedDn);
+// ===== Edycja członkostwa: wspólna logika dla zakładek grup, uprawnień i udziałów =====
+// Original membership (state.objectOriginalGroups) + pending changes give the
+// "effective" groups; all three tabs are derived from it, so a change in any
+// tab is reflected in the others. DNs are compared case-insensitively.
+function findMemberOfLine(groupDn) {
+  const key = String(groupDn).toLowerCase();
+  return Array.from(document.querySelectorAll('#memberOfList .member-of-line'))
+    .find((line) => String(line.dataset.groupdn || '').toLowerCase() === key) || null;
+}
+
+function deleteCaseInsensitive(set, dn) {
+  const key = String(dn).toLowerCase();
+  [...set].forEach((v) => { if (String(v).toLowerCase() === key) set.delete(v); });
+}
+
+function effectiveGroupKeys() {
+  const keys = new Set(state.objectOriginalGroups ? state.objectOriginalGroups.keys() : []);
+  state.pendingChanges?.removeGroups?.forEach((dn) => keys.delete(String(dn).toLowerCase()));
+  state.pendingChanges?.addGroups?.forEach((dn) => keys.add(String(dn).toLowerCase()));
+  return keys;
+}
+
+function setGroupMembership(groupDn, member) {
+  if (!groupDn || !state.pendingChanges) return;
+  const key = String(groupDn).toLowerCase();
+  const original = state.objectOriginalGroups?.get(key);
   const list = document.getElementById('memberOfList');
-  if (list && !list.querySelector(`[data-groupdn="${cssEscapeValue(pickedDn)}"]`)) {
-    list.querySelector(':scope > .text-muted')?.remove();
-    list.insertAdjacentHTML('beforeend', renderPendingMemberLine(pickedDn, true));
-    bindModalActions();
+  const line = findMemberOfLine(groupDn);
+  if (member) {
+    if (original) {
+      deleteCaseInsensitive(state.pendingChanges.removeGroups, groupDn);
+      line?.classList.remove('pending-removal');
+    } else {
+      deleteCaseInsensitive(state.pendingChanges.addGroups, groupDn);
+      state.pendingChanges.addGroups.add(groupDn);
+      if (list && !line) {
+        list.querySelector(':scope > .text-muted')?.remove();
+        list.insertAdjacentHTML('beforeend', renderPendingMemberLine(groupDn, true));
+        bindModalActions();
+      }
+      findMemberOfLine(groupDn)?.classList.remove('pending-removal');
+    }
+  } else if (original) {
+    deleteCaseInsensitive(state.pendingChanges.removeGroups, original);
+    state.pendingChanges.removeGroups.add(original);
+    line?.classList.add('pending-removal');
+  } else {
+    deleteCaseInsensitive(state.pendingChanges.addGroups, groupDn);
+    line?.remove();
+    if (list && !list.querySelector('.member-of-line')) list.innerHTML = '<span class="text-muted">Brak grup</span>';
   }
+  updatePendingChangesInfo();
+}
+
+function updatePendingChangesInfo() {
+  const el = document.getElementById('pendingChangesInfo');
+  if (!el) return;
+  const add = state.pendingChanges?.addGroups?.size || 0;
+  const remove = state.pendingChanges?.removeGroups?.size || 0;
+  el.innerHTML = add || remove
+    ? `Zmiany oczekujące: <span class="text-success fw-semibold">+${add}</span> / <span class="text-danger fw-semibold">−${remove}</span> grup`
+    : '';
+}
+
+function objectAccessTemplate(kind) {
+  const label = kind === 'perms' ? 'uprawnienia, opisu lub grupy' : 'udziału, ścieżki lub opisu';
+  return `
+    <div class="small text-muted mb-2">${kind === 'perms'
+      ? 'Zaznaczenie uprawnienia dodaje jego grupy w zakładce „Członek grup”, odznaczenie je usuwa. Zmiany zapisuje „Zastosuj zmiany”.'
+      : 'Odczyt = grupa <code>-r</code>, odczyt i zapis = grupa <code>-rw</code> (bez grupy <code>-r</code>). Zmiany zapisuje „Zastosuj zmiany”.'}</div>
+    <div class="search-input-wrap mb-2">
+      ${icon('search', 'search-input-icon')}
+      <input class="form-control form-control-sm obj-access-search" data-kind="${kind}" placeholder="Szukaj ${label}…" autocomplete="off" />
+    </div>
+    <div class="perm-list obj-access-list" id="objAccess-${kind}"><div class="lookup-empty"><span class="spinner-border spinner-border-sm text-primary"></span> Ładowanie…</div></div>`;
+}
+
+function objectItemVisible(item, active) {
+  const type = state.objectAccountType;
+  const allowed = !item.allowedTypes || !item.allowedTypes.length || item.allowedTypes.includes(type);
+  return allowed || active;
+}
+
+function notAllowedBadge(item) {
+  const type = state.objectAccountType;
+  const allowed = !item.allowedTypes || !item.allowedTypes.length || item.allowedTypes.includes(type);
+  return allowed ? '' : '<span class="badge text-bg-warning fw-normal ms-1">niedostępne dla tego typu konta</span>';
+}
+
+function permissionState(p, eff) {
+  const have = p.groups.filter((g) => eff.has(g.dn.toLowerCase())).length;
+  return have === 0 ? 'none' : have === p.groups.length ? 'full' : 'partial';
+}
+
+function shareLevelFor(sh, eff) {
+  if (sh.writeGroup?.dn && eff.has(sh.writeGroup.dn.toLowerCase())) return 'rw';
+  if (sh.readGroup?.dn && eff.has(sh.readGroup.dn.toLowerCase())) return 'r';
+  return '';
+}
+
+function renderObjectPermissions() {
+  const list = document.getElementById('objAccess-perms');
+  if (!list) return;
+  const eff = effectiveGroupKeys();
+  const q = (document.querySelector('.obj-access-search[data-kind="perms"]')?.value || '').trim().toLowerCase();
+  const catalog = state.permissionCatalog || [];
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('shield')}<div>Nie zdefiniowano uprawnień. Dodaj je w zakładce <strong>Ustawienia</strong>.</div></div>`;
+    return;
+  }
+  const rows = catalog
+    .map((p) => ({ p, st: permissionState(p, eff) }))
+    .filter(({ p, st }) => objectItemVisible(p, st !== 'none') && permissionMatches(p, q));
+  if (!rows.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania.</div>';
+    return;
+  }
+  let lastCategory = null;
+  list.innerHTML = rows.map(({ p, st }) => {
+    const header = p.category !== lastCategory && (p.category || lastCategory !== null)
+      ? `<div class="perm-category">${escapeHtml(p.category || 'Bez kategorii')}</div>` : '';
+    lastCategory = p.category;
+    const groupsHtml = p.groups.map((g) => `<span class="perm-group ${eff.has(g.dn.toLowerCase()) ? 'perm-group-on' : ''}" title="${escapeHtml(g.dn)}">${icon('group')}${escapeHtml(g.name || dnLabel(g.dn))}</span>`).join('');
+    return `${header}
+      <label class="perm-item ${st !== 'none' ? 'checked' : ''}">
+        <input type="checkbox" class="form-check-input obj-perm-check" value="${escapeHtml(p.id)}" ${st === 'full' ? 'checked' : ''} data-partial="${st === 'partial' ? '1' : ''}">
+        <span class="perm-item-body">
+          <span class="perm-item-name">${escapeHtml(p.name)}${st === 'partial' ? '<span class="badge text-bg-light border fw-normal ms-1">częściowo (brak części grup)</span>' : ''}${notAllowedBadge(p)}</span>
+          ${p.description ? `<span class="perm-item-desc">${escapeHtml(p.description)}</span>` : ''}
+          <span class="perm-item-groups">${groupsHtml}</span>
+        </span>
+      </label>`;
+  }).join('');
+  list.querySelectorAll('.obj-perm-check[data-partial="1"]').forEach((box) => { box.indeterminate = true; });
+}
+
+function renderObjectShares() {
+  const list = document.getElementById('objAccess-shares');
+  if (!list) return;
+  const eff = effectiveGroupKeys();
+  const q = (document.querySelector('.obj-access-search[data-kind="shares"]')?.value || '').trim().toLowerCase();
+  const catalog = state.shareCatalog || [];
+  if (!catalog.length) {
+    list.innerHTML = `<div class="empty-state">${icon('folder')}<div>Nie zdefiniowano udziałów. Dodaj je w zakładce <strong>Ustawienia</strong>.</div></div>`;
+    return;
+  }
+  const rows = catalog
+    .map((sh) => ({ sh, level: shareLevelFor(sh, eff) }))
+    .filter(({ sh, level }) => objectItemVisible(sh, Boolean(level)) && shareMatches(sh, q));
+  if (!rows.length) {
+    list.innerHTML = '<div class="lookup-empty">Brak udziałów pasujących do wyszukiwania.</div>';
+    return;
+  }
+  list.innerHTML = rows.map(({ sh, level }) => {
+    const both = sh.readGroup?.dn && sh.writeGroup?.dn && eff.has(sh.readGroup.dn.toLowerCase()) && eff.has(sh.writeGroup.dn.toLowerCase());
+    const opt = (value, label) => `
+      <input type="radio" class="btn-check obj-share-level" name="objshare-${escapeHtml(sh.id)}" id="objshare-${escapeHtml(sh.id)}-${value || 'none'}" value="${value}" data-id="${escapeHtml(sh.id)}" ${level === value ? 'checked' : ''}>
+      <label for="objshare-${escapeHtml(sh.id)}-${value || 'none'}">${label}</label>`;
+    return `
+      <div class="perm-item share-item ${level ? 'checked' : ''}">
+        <span class="share-item-icon">${icon('folder')}</span>
+        <span class="perm-item-body flex-grow-1">
+          <span class="perm-item-name">${escapeHtml(sh.name)}${notAllowedBadge(sh)}${both ? '<span class="badge text-bg-light border fw-normal ms-1">ma -r i -rw: wybierz poziom, aby uporządkować</span>' : ''}</span>
+          <span class="share-path font-monospace">${escapeHtml(sh.path)}</span>
+          ${sh.description ? `<span class="perm-item-desc">${escapeHtml(sh.description)}</span>` : ''}
+          <span class="perm-item-groups">${shareGroupsHtml(sh, level)}</span>
+        </span>
+        <span class="segmented segmented-sm share-levels" role="radiogroup" aria-label="Dostęp do ${escapeHtml(sh.name)}">
+          ${opt('', 'Brak')}${sh.readGroup?.dn ? opt('r', 'Odczyt') : ''}${sh.writeGroup?.dn ? opt('rw', 'Odczyt i zapis') : ''}
+        </span>
+      </div>`;
+  }).join('');
+}
+
+function renderObjectAccess() {
+  renderObjectPermissions();
+  renderObjectShares();
+}
+
+function refreshObjectAccess() {
+  if (document.getElementById('objAccess-perms')) renderObjectAccess();
+}
+
+// Groups still needed by other fully granted permissions or by active shares
+// are kept when something is removed.
+function groupsNeededExcept({ permId = null, shareId = null } = {}) {
+  const eff = effectiveGroupKeys();
+  const needed = new Set();
+  (state.permissionCatalog || []).forEach((p) => {
+    if (p.id !== permId && permissionState(p, eff) === 'full') p.groups.forEach((g) => needed.add(g.dn.toLowerCase()));
+  });
+  (state.shareCatalog || []).forEach((sh) => {
+    if (sh.id === shareId) return;
+    const level = shareLevelFor(sh, eff);
+    const g = level === 'rw' ? sh.writeGroup : level === 'r' ? sh.readGroup : null;
+    if (g?.dn) needed.add(g.dn.toLowerCase());
+  });
+  return needed;
+}
+
+objectBody.addEventListener('change', (event) => {
+  const permBox = event.target.closest('.obj-perm-check');
+  if (permBox) {
+    const p = state.permissionCatalog.find((x) => x.id === permBox.value);
+    if (!p) return;
+    if (permBox.checked) {
+      p.groups.forEach((g) => setGroupMembership(g.dn, true));
+    } else {
+      const needed = groupsNeededExcept({ permId: p.id });
+      p.groups.filter((g) => !needed.has(g.dn.toLowerCase())).forEach((g) => setGroupMembership(g.dn, false));
+    }
+    renderObjectAccess();
+    return;
+  }
+  const shareRadio = event.target.closest('.obj-share-level');
+  if (shareRadio) {
+    const sh = state.shareCatalog.find((x) => x.id === shareRadio.dataset.id);
+    if (!sh) return;
+    const needed = groupsNeededExcept({ shareId: sh.id });
+    const drop = (g) => { if (g?.dn && !needed.has(g.dn.toLowerCase())) setGroupMembership(g.dn, false); };
+    const level = shareRadio.value;
+    if (level === 'rw') {
+      setGroupMembership(sh.writeGroup.dn, true);
+      drop(sh.readGroup);
+    } else if (level === 'r') {
+      setGroupMembership(sh.readGroup.dn, true);
+      drop(sh.writeGroup);
+    } else {
+      drop(sh.readGroup);
+      drop(sh.writeGroup);
+    }
+    renderObjectAccess();
+  }
+});
+
+objectBody.addEventListener('input', debounce((event) => {
+  if (event.target.closest('.obj-access-search')) renderObjectAccess();
+}, 150));
+
+function addPendingGroupToObject(item) {
+  setGroupMembership(item.dn || item.distinguishedName, true);
+  refreshObjectAccess();
   showToast('Dodano do zmian oczekujących');
 }
 
@@ -1733,20 +2038,8 @@ document.getElementById('clearAllCopyGroups').addEventListener('click', () => {
 
 document.getElementById('applyCopyGroupsBtn').addEventListener('click', async () => {
   const selectedGroups = Array.from(document.querySelectorAll('.copy-group-check:checked')).map((x) => x.value);
-  selectedGroups.forEach((groupDn) => {
-    state.pendingChanges.addGroups.add(groupDn);
-    state.pendingChanges.removeGroups.delete(groupDn);
-  });
-  const list = document.getElementById('memberOfList');
-  if (list) {
-    list.querySelector(':scope > .text-muted')?.remove();
-    selectedGroups.forEach((groupDn) => {
-      if (!list.querySelector(`[data-groupdn="${cssEscapeValue(groupDn)}"]`)) {
-        list.insertAdjacentHTML('beforeend', renderPendingMemberLine(groupDn, true));
-      }
-    });
-    bindModalActions();
-  }
+  selectedGroups.forEach((groupDn) => setGroupMembership(groupDn, true));
+  refreshObjectAccess();
   copyGroupsModal.hide();
   showToast('Grupy dodane do zmian oczekujących');
 });
@@ -1914,6 +2207,26 @@ function exportStaleCsv(kind) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// Dashboard tiles open the matching report with the tile's period and run it.
+document.querySelectorAll('[data-stale-report]').forEach((tile) => {
+  tile.addEventListener('click', () => {
+    const page = tile.dataset.staleReport;
+    const section = document.querySelector(`.stale-report[data-report-page="${page}"]`);
+    if (page === 'stale-users') {
+      section.querySelector('.stale-amount').value = '2';
+      section.querySelector('.stale-unit').value = '365';
+    } else {
+      section.querySelector('.stale-amount').value = '1';
+      section.querySelector('.stale-unit').value = '365';
+    }
+    section.querySelector('.stale-include-disabled').checked = false;
+    setOuFieldValue(section.querySelector('.stale-ou').id, '', { silent: true });
+    bootstrap.Tab.getOrCreateInstance(document.getElementById('reports-tab')).show();
+    switchReportPage(page);
+    runStaleReport(section);
+  });
+});
+
 document.querySelectorAll('.stale-report').forEach((section) => {
   section.querySelector('.stale-form').addEventListener('submit', (event) => {
     event.preventDefault();
@@ -1933,6 +2246,8 @@ async function loadDashboardStats() {
     if (statComputers) statComputers.textContent = data.computers;
     if (statOus) statOus.textContent = data.ous;
     if (statTotal) statTotal.textContent = data.total;
+    document.getElementById('statStaleUsers').textContent = data.staleUsers2y ?? '–';
+    document.getElementById('statStaleComputers').textContent = data.staleComputers1y ?? '–';
   } catch (error) {
     showToast(`Dashboard: ${error.message}`, true);
   }
@@ -1998,12 +2313,83 @@ const LOGIN_HINT = 'Generowany automatycznie po wpisaniu imienia i nazwiska. Mo�
 let newUserLoginAvailable = false;
 let newUserLoginSeq = 0;
 
+const newUserServiceName = document.getElementById('newUserServiceName');
+const SERVICE_PREFIX = 'svc_';
+
+function getNewUserType() {
+  return newUserForm.querySelector('input[name="userType"]:checked')?.value || '';
+}
+
+function isServiceType() {
+  return getNewUserType() === 'service';
+}
+
 function isNewUserInfoValid() {
-  return Boolean(newUserLoginAvailable
-    && newUserFirstName.value.trim()
-    && newUserLastName.value.trim()
-    && newUserPassword.value
-    && newUserOuDn.value);
+  const names = isServiceType()
+    ? newUserServiceName.value.trim() && newUserLogin.value.trim().toLowerCase().startsWith(SERVICE_PREFIX)
+    : newUserFirstName.value.trim() && newUserLastName.value.trim();
+  return Boolean(newUserLoginAvailable && names && newUserPassword.value && newUserOuDn.value);
+}
+
+// Polish letters -> ASCII, spaces -> "_", keeps only characters valid in a login.
+function toServiceLogin(name) {
+  const map = { ą: 'a', ć: 'c', ę: 'e', ł: 'l', ń: 'n', ó: 'o', ś: 's', ź: 'z', ż: 'z' };
+  const body = String(name || '').toLowerCase().split('').map((ch) => map[ch] ?? ch).join('')
+    .replace(/\s+/g, '_').replace(/[^a-z0-9._-]/g, '').replace(/_+/g, '_').replace(/^[_.-]+|[_.-]+$/g, '');
+  return body ? `${SERVICE_PREFIX}${body}`.slice(0, 20) : '';
+}
+
+// Shows the fields of the chosen account type and applies its rules
+// (service accounts: svc_ login, OU fixed to the one from Settings).
+function applyNewUserType() {
+  const type = getNewUserType();
+  const service = type === 'service';
+  newUserForm.querySelectorAll('[data-type-only]').forEach((el) => el.classList.toggle('d-none', el.dataset.typeOnly !== type));
+  newUserFirstName.required = !service;
+  newUserLastName.required = !service;
+  newUserLogin.placeholder = service ? 'svc_nazwa' : 'nazwisko.i';
+  const ouField = newUserForm.querySelector('.ou-field[data-target-input="newUserOuDn"]');
+  ouField.classList.toggle('ou-field-locked', service);
+  ouField.querySelector('.pick-ou-btn').disabled = service;
+  document.getElementById('newUserOuLocked').classList.toggle('d-none', !service);
+  if (service) {
+    document.getElementById('newUserOuFromReference').classList.add('d-none');
+    setOuFieldValue('newUserOuDn', state.portalSettings.serviceAccountOuDn || '', { silent: true });
+    if (!state.portalSettings.serviceAccountOuDn) {
+      document.getElementById('newUserOuLocked').textContent = 'Nie wskazano OU dla kont serwisowych. Ustaw je w zakładce Ustawienia → Konta serwisowe.';
+      document.getElementById('newUserOuLocked').classList.add('text-danger');
+    } else {
+      document.getElementById('newUserOuLocked').textContent = 'Konta serwisowe są zawsze tworzone w OU wskazanym w Ustawieniach.';
+      document.getElementById('newUserOuLocked').classList.remove('text-danger');
+    }
+  } else if (state.newUser.lastType === 'service') {
+    setOuFieldValue('newUserOuDn', '', { silent: true });
+  }
+  if (state.newUser.lastType && state.newUser.lastType !== type) {
+    // Changing the type: drop the login and anything not allowed for the new type.
+    newUserLogin.value = '';
+    state.newUser.loginTouched = false;
+    setNewUserLoginState('idle', '');
+    pruneSelectionsForType();
+  }
+  state.newUser.lastType = type;
+  LOGIN_HINT_CURRENT = service
+    ? 'Generowany jako svc_nazwa po wpisaniu nazwy konta. Musi zaczynać się od svc_.'
+    : LOGIN_HINT;
+  if (!newUserLogin.value) newUserLoginStatus.textContent = LOGIN_HINT_CURRENT;
+  updateNewUserSubmitState();
+}
+
+let LOGIN_HINT_CURRENT = '';
+
+function allowedForType(item) {
+  const type = getNewUserType();
+  return !item.allowedTypes || !item.allowedTypes.length || !type || item.allowedTypes.includes(type);
+}
+
+function pruneSelectionsForType() {
+  state.permissionCatalog.filter((p) => !allowedForType(p)).forEach((p) => state.newUser.permissions.delete(p.id));
+  state.shareCatalog.filter((sh) => !allowedForType(sh)).forEach((sh) => state.newUser.shares.delete(sh.id));
 }
 
 function updateNewUserSubmitState() {
@@ -2017,7 +2403,7 @@ function updateNewUserSubmitState() {
 
 function setNewUserLoginState(kind, message) {
   newUserLoginAvailable = kind === 'ok';
-  newUserLoginStatus.textContent = message || LOGIN_HINT;
+  newUserLoginStatus.textContent = message || LOGIN_HINT_CURRENT || LOGIN_HINT;
   newUserLoginStatus.classList.toggle('text-success', kind === 'ok');
   newUserLoginStatus.classList.toggle('text-danger', kind === 'error');
   newUserLogin.classList.toggle('is-valid', kind === 'ok');
@@ -2044,6 +2430,10 @@ async function checkNewUserLoginAvailability() {
     setNewUserLoginState('error', 'Login może mieć maksymalnie 20 znaków (limit sAMAccountName).');
     return;
   }
+  if (isServiceType() && !login.toLowerCase().startsWith(SERVICE_PREFIX)) {
+    setNewUserLoginState('error', 'Login konta serwisowego musi zaczynać się od svc_.');
+    return;
+  }
   try {
     setNewUserLoginState('checking', 'Sprawdzanie dostępności…');
     const result = await api(`/api/user/login-availability?login=${encodeURIComponent(login)}`);
@@ -2056,6 +2446,11 @@ async function checkNewUserLoginAvailability() {
 
 async function autoFillNewUserLogin({ force = false } = {}) {
   if (state.newUser.loginTouched && !force) return;
+  if (isServiceType()) {
+    newUserLogin.value = toServiceLogin(newUserServiceName.value);
+    await checkNewUserLoginAvailability();
+    return;
+  }
   const firstName = newUserFirstName.value.trim();
   const lastName = newUserLastName.value.trim();
   const mySeq = ++newUserLoginSeq;
@@ -2086,6 +2481,10 @@ newUserFirstName.addEventListener('input', () => {
   updateNewUserSubmitState();
 });
 newUserLastName.addEventListener('input', () => {
+  debouncedAutoFillNewUserLogin();
+  updateNewUserSubmitState();
+});
+newUserServiceName.addEventListener('input', () => {
   debouncedAutoFillNewUserLogin();
   updateNewUserSubmitState();
 });
@@ -2206,8 +2605,10 @@ async function applyReferenceUser(item) {
   document.getElementById('newUserReferenceName').textContent = login ? `${name} (${login})` : name;
   document.getElementById('newUserReferenceMeta').innerHTML = dnToPathHtml(parentDn(refDn));
 
-  setOuFieldValue('newUserOuDn', parentDn(refDn));
-  document.getElementById('newUserOuFromReference').classList.remove('d-none');
+  if (!isServiceType()) {
+    setOuFieldValue('newUserOuDn', parentDn(refDn));
+    document.getElementById('newUserOuFromReference').classList.remove('d-none');
+  }
 
   // Permissions are copied only when the admin switches on the
   // "Kopiuj uprawnienia od wzorca" toggle.
@@ -2217,7 +2618,7 @@ async function applyReferenceUser(item) {
   if (state.newUser.copyFromRef) await applyReferenceCopy();
   updateCopyToggle();
   updateNewUserSubmitState();
-  showToast(`Skopiowano OU od: ${name}.`);
+  showToast(isServiceType() ? `Wybrano użytkownika wzorcowego: ${name}.` : `Skopiowano OU od: ${name}.`);
 }
 
 // ----- Kopiowanie uprawnień od użytkownika wzorcowego -----
@@ -2239,14 +2640,15 @@ async function applyReferenceCopy() {
   const copied = { perms: new Set(), shares: new Set(), groups: new Set() };
   const covered = new Set();
 
-  state.permissionCatalog.forEach((p) => {
+  state.permissionCatalog.filter(allowedForType).forEach((p) => {
     if (p.groups.length && p.groups.every((g) => ref.has(g.dn.toLowerCase())) && !state.newUser.permissions.has(p.id)) {
       state.newUser.permissions.add(p.id);
       copied.perms.add(p.id);
     }
   });
-  state.shareCatalog.forEach((sh) => {
-    const level = ref.has(sh.writeGroup.dn.toLowerCase()) ? 'rw' : ref.has(sh.readGroup.dn.toLowerCase()) ? 'r' : null;
+  const hasGroup = (g) => Boolean(g?.dn && ref.has(g.dn.toLowerCase()));
+  state.shareCatalog.filter(allowedForType).forEach((sh) => {
+    const level = hasGroup(sh.writeGroup) ? 'rw' : hasGroup(sh.readGroup) ? 'r' : null;
     if (level && !state.newUser.shares.has(sh.id)) {
       state.newUser.shares.set(sh.id, level);
       copied.shares.add(sh.id);
@@ -2260,8 +2662,8 @@ async function applyReferenceCopy() {
   state.shareCatalog
     .filter((sh) => state.newUser.shares.has(sh.id))
     .forEach((sh) => {
-      covered.add(sh.readGroup.dn.toLowerCase());
-      covered.add(sh.writeGroup.dn.toLowerCase());
+      if (sh.readGroup?.dn) covered.add(sh.readGroup.dn.toLowerCase());
+      if (sh.writeGroup?.dn) covered.add(sh.writeGroup.dn.toLowerCase());
     });
   const existing = new Set([...state.newUser.groups].map((g) => g.toLowerCase()));
   state.newUser.referenceGroups.forEach((dn) => {
@@ -2350,8 +2752,11 @@ function resetNewUserForm() {
   showPwdOptionsHint('');
   document.getElementById('newUserPermSearch').value = '';
   document.getElementById('newUserShareSearch').value = '';
+  newUserServiceName.value = '';
   showNewUserStep(1);
   loadWizardCatalogs();
+  loadPortalSettings();
+  applyNewUserType();
 }
 
 // The picker modals open on top of the wizard without hiding it, so this
@@ -2381,6 +2786,11 @@ newUserForm.addEventListener('submit', async (event) => {
     payload.accountDisabled = parseTruthy(payload.accountDisabled);
     payload.accountExpiresMode = payload.accountExpiresModeNewUser || 'never';
     payload.groups = Array.from(state.newUser.groups);
+    if (isServiceType()) {
+      payload.displayName = newUserServiceName.value.trim();
+      payload.firstName = '';
+      payload.lastName = '';
+    }
     payload.permissionIds = Array.from(state.newUser.permissions);
     payload.shareAccess = Array.from(state.newUser.shares, ([id, level]) => ({ id, level }));
     Object.keys(payload).filter((k) => k.startsWith('share-')).forEach((k) => delete payload[k]);
@@ -2429,7 +2839,10 @@ function showNewUserStep(step) {
   if (WIZARD_NEXT_LABELS[step]) document.getElementById('newUserNextLabel').textContent = WIZARD_NEXT_LABELS[step];
   newUserModalEl.querySelector('.modal-body').scrollTop = 0;
   updateNewUserSubmitState();
-  if (step === 2) setTimeout(() => newUserFirstName.focus(), 50);
+  if (step === 2) {
+    applyNewUserType();
+    setTimeout(() => (isServiceType() ? newUserServiceName : newUserFirstName).focus(), 50);
+  }
   if (step === WIZARD_LAST_STEP) setTimeout(() => newUserSubmitBtn.focus(), 50);
   if (step === 3) {
     renderNewUserPermissions();
@@ -2453,7 +2866,7 @@ function goNewUserNext() {
 document.getElementById('newUserNextBtn').addEventListener('click', goNewUserNext);
 document.getElementById('newUserBackBtn').addEventListener('click', () => showNewUserStep(Math.max(1, state.newUser.step - 1)));
 newUserForm.querySelectorAll('input[name="userType"]').forEach((radio) => {
-  radio.addEventListener('change', updateNewUserSubmitState);
+  radio.addEventListener('change', applyNewUserType);
   radio.closest('.user-type-card').addEventListener('dblclick', () => {
     radio.checked = true;
     goNewUserNext();
@@ -2469,6 +2882,15 @@ async function loadShareCatalog() {
     showToast(`Udziały: ${error.message}`, true);
   }
   return state.shareCatalog;
+}
+
+async function loadPortalSettings() {
+  try {
+    state.portalSettings = await api('/api/settings');
+  } catch (error) {
+    showToast(`Ustawienia: ${error.message}`, true);
+  }
+  return state.portalSettings;
 }
 
 let wizardCatalogsPromise = null;
@@ -2510,9 +2932,9 @@ function renderNewUserPermissions() {
     renderNewUserSummary();
     return;
   }
-  const visible = catalog.filter((p) => permissionMatches(p, q));
+  const visible = catalog.filter(allowedForType).filter((p) => permissionMatches(p, q));
   if (!visible.length) {
-    list.innerHTML = '<div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania.</div>';
+    list.innerHTML = '<div class="lookup-empty">Brak uprawnień pasujących do wyszukiwania lub dostępnych dla tego typu konta.</div>';
     renderNewUserSummary();
     return;
   }
@@ -2551,9 +2973,14 @@ document.getElementById('newUserPermSearch').addEventListener('input', debounce(
 // ----- Udziały sieciowe w kreatorze -----
 const SHARE_LEVELS = { r: 'Odczyt', rw: 'Odczyt i zapis' };
 
+function shareGroupsHtml(sh, level = '') {
+  const chip = (g, lvl, ic) => (g?.dn ? `<span class="perm-group ${level === lvl ? 'perm-group-on' : ''}" title="${escapeHtml(g.dn)}">${icon(ic)}${escapeHtml(g.name || dnLabel(g.dn))}</span>` : '');
+  return chip(sh.readGroup, 'r', 'eye') + chip(sh.writeGroup, 'rw', 'settings');
+}
+
 function shareMatches(sh, q) {
   if (!q) return true;
-  const hay = [sh.name, sh.description, sh.path, sh.readGroup?.name, sh.writeGroup?.name, dnLabel(sh.readGroup?.dn), dnLabel(sh.writeGroup?.dn)].join(' ').toLowerCase();
+  const hay = [sh.name, sh.description, sh.path, sh.readGroup?.name, sh.writeGroup?.name, sh.readGroup ? dnLabel(sh.readGroup.dn) : '', sh.writeGroup ? dnLabel(sh.writeGroup.dn) : ''].join(' ').toLowerCase();
   return q.split(/\s+/).every((word) => hay.includes(word));
 }
 
@@ -2566,9 +2993,9 @@ function renderNewUserShares() {
     list.innerHTML = `<div class="empty-state">${icon('folder')}<div>Nie zdefiniowano jeszcze udziałów sieciowych.<br>Dodaj je w zakładce <strong>Ustawienia</strong>.</div></div>`;
     return;
   }
-  const visible = catalog.filter((sh) => shareMatches(sh, q));
+  const visible = catalog.filter(allowedForType).filter((sh) => shareMatches(sh, q));
   if (!visible.length) {
-    list.innerHTML = '<div class="lookup-empty">Brak udziałów pasujących do wyszukiwania.</div>';
+    list.innerHTML = '<div class="lookup-empty">Brak udziałów pasujących do wyszukiwania lub dostępnych dla tego typu konta.</div>';
     return;
   }
   list.innerHTML = visible.map((sh) => {
@@ -2583,13 +3010,10 @@ function renderNewUserShares() {
           <span class="perm-item-name">${escapeHtml(sh.name)}${isCopied('shares', sh.id) && level ? fromRefBadge : ''}</span>
           <span class="share-path font-monospace">${escapeHtml(sh.path)}</span>
           ${sh.description ? `<span class="perm-item-desc">${escapeHtml(sh.description)}</span>` : ''}
-          <span class="perm-item-groups">
-            <span class="perm-group ${level === 'r' ? 'perm-group-on' : ''}" title="${escapeHtml(sh.readGroup.dn)}">${icon('eye')}${escapeHtml(sh.readGroup.name || dnLabel(sh.readGroup.dn))}</span>
-            <span class="perm-group ${level === 'rw' ? 'perm-group-on' : ''}" title="${escapeHtml(sh.writeGroup.dn)}">${icon('settings')}${escapeHtml(sh.writeGroup.name || dnLabel(sh.writeGroup.dn))}</span>
-          </span>
+          <span class="perm-item-groups">${shareGroupsHtml(sh, level)}</span>
         </span>
         <span class="segmented segmented-sm share-levels" role="radiogroup" aria-label="Dostęp do ${escapeHtml(sh.name)}">
-          ${opt('', 'Brak')}${opt('r', 'Odczyt')}${opt('rw', 'Odczyt i zapis')}
+          ${opt('', 'Brak')}${sh.readGroup?.dn ? opt('r', 'Odczyt') : ''}${sh.writeGroup?.dn ? opt('rw', 'Odczyt i zapis') : ''}
         </span>
       </div>`;
   }).join('');
@@ -2611,7 +3035,8 @@ function selectedShares() {
     .map((sh) => {
       const level = state.newUser.shares.get(sh.id);
       return { share: sh, level, group: level === 'rw' ? sh.writeGroup : sh.readGroup };
-    });
+    })
+    .filter((x) => x.group?.dn);
 }
 
 // Same rules as the server: permission groups + one group per share + other
@@ -2624,11 +3049,11 @@ function newUserResultingGroups() {
   const shares = selectedShares();
   shares.forEach(({ group }) => map.set(group.dn.toLowerCase(), group.dn));
   state.newUser.groups.forEach((dn) => map.set(dn.toLowerCase(), dn));
-  shares.filter((x) => x.level === 'rw').forEach(({ share }) => map.delete(share.readGroup.dn.toLowerCase()));
+  shares.filter((x) => x.level === 'rw' && x.share.readGroup?.dn).forEach(({ share }) => map.delete(share.readGroup.dn.toLowerCase()));
   return [...map.values()];
 }
 
-const USER_TYPE_LABELS = { 'eskulap-domain': 'Użytkownik domeny Eskulap' };
+const USER_TYPE_LABELS = { 'eskulap-domain': 'Użytkownik domeny Eskulap', service: 'Konto serwisowe' };
 
 function summaryRow(label, valueHtml) {
   return `<dt>${escapeHtml(label)}</dt><dd>${valueHtml || '<span class="text-muted">—</span>'}</dd>`;
@@ -2674,8 +3099,9 @@ function renderNewUserSummary() {
   const infoHtml = summarySection('Informacje o użytkowniku', 2, `
     <dl class="summary-grid">
       ${summaryRow('Użytkownik wzorcowy', refName ? `${escapeHtml(refName)}${state.newUser.copyFromRef ? ' <span class="badge text-bg-success fw-normal ms-1">uprawnienia skopiowane</span>' : ''}` : '')}
-      ${summaryRow('Imię i nazwisko', escapeHtml(`${first} ${last}`.trim()))}
-      ${summaryRow('Nazwa wyświetlana', escapeHtml(`${first} ${last}`.trim()))}
+      ${isServiceType()
+        ? summaryRow('Nazwa konta (wyświetlana)', escapeHtml(newUserServiceName.value.trim()))
+        : `${summaryRow('Imię i nazwisko', escapeHtml(`${first} ${last}`.trim()))}${summaryRow('Nazwa wyświetlana', escapeHtml(`${first} ${last}`.trim()))}`}
       ${summaryRow('Login (sAMAccountName)', `<span class="font-monospace">${escapeHtml(login)}</span>`)}
       ${summaryRow('Nazwa logowania (UPN)', AD_DOMAIN ? `<span class="font-monospace">${escapeHtml(login)}@${escapeHtml(AD_DOMAIN)}</span>` : '')}
       ${summaryRow('Nazwa obiektu w AD', `<span class="font-monospace">${escapeHtml(login)}</span>`)}
@@ -2741,6 +3167,22 @@ document.getElementById('newUserFinalSummary').addEventListener('click', (event)
   }
 });
 
+// ===== Ustawienia: typy kont przy uprawnieniach / udziałach =====
+function setTypeCheckboxes(cls, allowedTypes) {
+  document.querySelectorAll(`.${cls}`).forEach((box) => {
+    box.checked = !allowedTypes || !allowedTypes.length || allowedTypes.includes(box.value);
+  });
+}
+
+function readTypeCheckboxes(cls) {
+  return Array.from(document.querySelectorAll(`.${cls}:checked`)).map((box) => box.value);
+}
+
+function typesBadgeHtml(item) {
+  if (!item.allowedTypes || !item.allowedTypes.length) return '';
+  return ` <span class="badge text-bg-light border fw-normal ms-1" title="Dostępne tylko dla wybranych typów kont">tylko: ${item.allowedTypes.map((t) => escapeHtml(USER_TYPE_LABELS[t] || t)).join(', ')}</span>`;
+}
+
 // ===== Ustawienia: uprawnienia =====
 const permissionModal = new bootstrap.Modal(document.getElementById('permissionModal'));
 const permissionEdit = { groups: [] };
@@ -2760,7 +3202,7 @@ function renderPermissionsTable() {
   body.innerHTML = rows.map((p) => `
     <tr>
       <td>
-        <div class="fw-semibold">${escapeHtml(p.name)}${p.category ? ` <span class="badge text-bg-light border fw-normal ms-1">${escapeHtml(p.category)}</span>` : ''}</div>
+        <div class="fw-semibold">${escapeHtml(p.name)}${p.category ? ` <span class="badge text-bg-light border fw-normal ms-1">${escapeHtml(p.category)}</span>` : ''}${typesBadgeHtml(p)}</div>
         ${p.description ? `<div class="small text-muted">${escapeHtml(p.description)}</div>` : ''}
       </td>
       <td><div class="perm-item-groups">${permissionGroupsLine(p)}</div></td>
@@ -2791,6 +3233,7 @@ function openPermissionModal(permission = null) {
   document.getElementById('permissionCategory').value = permission?.category || '';
   document.getElementById('permissionDescription').value = permission?.description || '';
   permissionEdit.groups = (permission?.groups || []).map((g) => ({ ...g }));
+  setTypeCheckboxes('permission-type', permission?.allowedTypes);
   const categories = [...new Set(state.permissionCatalog.map((p) => p.category).filter(Boolean))];
   document.getElementById('permissionCategories').innerHTML = categories.map((c) => `<option value="${escapeHtml(c)}">`).join('');
   renderPermissionEditGroups();
@@ -2825,12 +3268,14 @@ document.getElementById('permissionForm').addEventListener('submit', async (even
   const id = document.getElementById('permissionId').value;
   const payload = {
     name: document.getElementById('permissionName').value.trim(),
+    allowedTypes: readTypeCheckboxes('permission-type'),
     category: document.getElementById('permissionCategory').value.trim(),
     description: document.getElementById('permissionDescription').value.trim(),
     groups: permissionEdit.groups
   };
   if (!payload.name) return showToast('Podaj nazwę uprawnienia', true);
   if (!payload.groups.length) return showToast('Wybierz co najmniej jedną grupę AD', true);
+  if (!payload.allowedTypes.length) return showToast('Zaznacz co najmniej jeden typ konta', true);
   const btn = document.getElementById('permissionSaveBtn');
   try {
     btn.disabled = true;
@@ -2885,12 +3330,9 @@ function renderSharesTable() {
   }
   body.innerHTML = rows.map((sh) => `
     <tr>
-      <td><div class="fw-semibold">${escapeHtml(sh.name)}</div>${sh.description ? `<div class="small text-muted">${escapeHtml(sh.description)}</div>` : ''}</td>
+      <td><div class="fw-semibold">${escapeHtml(sh.name)}${typesBadgeHtml(sh)}</div>${sh.description ? `<div class="small text-muted">${escapeHtml(sh.description)}</div>` : ''}</td>
       <td class="font-monospace small text-break">${escapeHtml(sh.path)}</td>
-      <td><div class="perm-item-groups flex-column align-items-start">
-        <span class="perm-group" title="${escapeHtml(sh.readGroup.dn)}">${icon('eye')}${escapeHtml(sh.readGroup.name || dnLabel(sh.readGroup.dn))}</span>
-        <span class="perm-group" title="${escapeHtml(sh.writeGroup.dn)}">${icon('settings')}${escapeHtml(sh.writeGroup.name || dnLabel(sh.writeGroup.dn))}</span>
-      </div></td>
+      <td><div class="perm-item-groups flex-column align-items-start">${shareGroupsHtml(sh)}</div></td>
       <td class="small text-muted">${escapeHtml(new Date(sh.updatedAt).toLocaleString('pl-PL'))}${sh.updatedBy ? `<div>${escapeHtml(sh.updatedBy)}</div>` : ''}</td>
       <td class="text-end text-nowrap">
         <button type="button" class="btn-icon share-edit" data-id="${escapeHtml(sh.id)}" title="Edytuj" aria-label="Edytuj">${icon('settings')}</button>
@@ -2911,7 +3353,7 @@ function renderShareSlots() {
     document.getElementById(id).innerHTML = g
       ? `<div class="member-of-line"><span class="group-badge" title="${escapeHtml(g.dn)}">${dnChipContent(g.dn)}</span><button type="button" class="btn-icon btn-icon-sm share-slot-clear" data-level="${level}" title="Usuń" aria-label="Usuń">${icon('x')}</button></div>
          ${suffixOk ? '' : `<div class="field-hint text-warning-emphasis">Nazwa grupy nie kończy się na „-${level}”. Upewnij się, że to właściwa grupa.</div>`}`
-      : '<div class="chip-empty py-2">Nie wybrano grupy</div>';
+      : `<div class="chip-empty py-2">Brak grupy${level === 'r' ? ' (udział bez dostępu tylko do odczytu)' : ' (udział bez dostępu do zapisu)'}</div>`;
   });
 }
 
@@ -2942,8 +3384,9 @@ function openShareModal(share = null) {
   document.getElementById('shareName').value = share?.name || '';
   document.getElementById('sharePath').value = share?.path || '';
   document.getElementById('shareDescription').value = share?.description || '';
-  shareEdit.r = share?.readGroup ? { ...share.readGroup } : null;
-  shareEdit.rw = share?.writeGroup ? { ...share.writeGroup } : null;
+  shareEdit.r = share?.readGroup?.dn ? { ...share.readGroup } : null;
+  shareEdit.rw = share?.writeGroup?.dn ? { ...share.writeGroup } : null;
+  setTypeCheckboxes('share-type', share?.allowedTypes);
   renderShareSlots();
   shareModal.show();
 }
@@ -2984,10 +3427,12 @@ document.getElementById('shareForm').addEventListener('submit', async (event) =>
     path: document.getElementById('sharePath').value.trim(),
     description: document.getElementById('shareDescription').value.trim(),
     readGroup: shareEdit.r,
-    writeGroup: shareEdit.rw
+    writeGroup: shareEdit.rw,
+    allowedTypes: readTypeCheckboxes('share-type')
   };
   if (!payload.name || !payload.path) return showToast('Podaj nazwę i ścieżkę udziału', true);
-  if (!payload.readGroup || !payload.writeGroup) return showToast('Wybierz obie grupy: -r i -rw', true);
+  if (!payload.readGroup && !payload.writeGroup) return showToast('Wybierz co najmniej jedną grupę: -r lub -rw', true);
+  if (!payload.allowedTypes.length) return showToast('Zaznacz co najmniej jeden typ konta', true);
   const btn = document.getElementById('shareSaveBtn');
   try {
     btn.disabled = true;
@@ -3021,9 +3466,39 @@ document.getElementById('sharesTableBody').addEventListener('click', async (even
   }
 });
 
-document.getElementById('settings-tab').addEventListener('shown.bs.tab', () => {
+// ===== Ustawienia: konta serwisowe =====
+const settingsServiceOuDn = document.getElementById('settingsServiceOuDn');
+const saveServiceOuBtn = document.getElementById('saveServiceOuBtn');
+
+function renderServiceOuSettings() {
+  const current = state.portalSettings.serviceAccountOuDn || '';
+  setOuFieldValue('settingsServiceOuDn', current, { silent: true });
+  saveServiceOuBtn.disabled = true;
+  document.getElementById('settingsServiceOuInfo').textContent = current
+    ? `Ostatnia zmiana: ${state.portalSettings.updatedAt ? new Date(state.portalSettings.updatedAt).toLocaleString('pl-PL') : '-'}${state.portalSettings.updatedBy ? ` (${state.portalSettings.updatedBy})` : ''}`
+    : 'Nie wskazano OU: tworzenie kont serwisowych jest zablokowane do czasu jego ustawienia.';
+}
+
+settingsServiceOuDn.addEventListener('change', () => {
+  saveServiceOuBtn.disabled = settingsServiceOuDn.value === (state.portalSettings.serviceAccountOuDn || '');
+});
+saveServiceOuBtn.addEventListener('click', async () => {
+  try {
+    saveServiceOuBtn.disabled = true;
+    state.portalSettings = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ serviceAccountOuDn: settingsServiceOuDn.value }) });
+    renderServiceOuSettings();
+    showToast('Zapisano OU dla kont serwisowych');
+  } catch (error) {
+    saveServiceOuBtn.disabled = false;
+    showToast(error.message, true);
+  }
+});
+
+document.getElementById('settings-tab').addEventListener('shown.bs.tab', async () => {
   refreshPermissionsTable();
   refreshSharesTable();
+  await loadPortalSettings();
+  renderServiceOuSettings();
 });
 
 // ===== Nowa grupa =====

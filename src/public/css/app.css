@@ -986,3 +986,23 @@ pre.json-view {
 .from-ref-badge { display: inline-block; margin-left: 0.45rem; font-size: 0.66rem; font-weight: 600; color: #166534; background: #dcfce7; border-radius: 999px; padding: 0.05rem 0.45rem; vertical-align: middle; white-space: nowrap; }
 .chip-from-ref { box-shadow: inset 0 0 0 1px #86d19f; }
 .chip .from-ref-badge { margin-left: 0.1rem; }
+
+/* ----- Dashboard: kafelki z linkiem do raportu ----- */
+.kpi-card-link { width: 100%; text-align: left; cursor: pointer; transition: border-color 0.12s ease, box-shadow 0.12s ease; }
+.kpi-card-link:hover { border-color: rgba(var(--accent-rgb), 0.45); box-shadow: var(--shadow-md); }
+.kpi-card-link > div { flex: 1 1 auto; }
+.kpi-link-caret { color: var(--ink-300); }
+.kpi-card-link:hover .kpi-link-caret { color: var(--accent); }
+.kpi-hint { font-size: 0.74rem; color: var(--ink-400); }
+.kpi-red { background: #fde8e8; color: #b91c1c; }
+.kpi-orange { background: #ffedd5; color: #c2410c; }
+
+/* ----- Logi obiektu: filtry ----- */
+.log-filters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+.log-filters .search-input-wrap { min-width: 220px; }
+.log-filters .search-input-wrap .form-control { padding-left: 2rem; }
+
+/* ----- Konto serwisowe ----- */
+.user-type-icon-service { background: #fdf1dc; color: #b45309; }
+.ou-field-locked .ou-field-btn { background: var(--ink-50); cursor: not-allowed; }
+.ou-field-locked .ou-field-caret { display: none; }

@@ -67,17 +67,19 @@ async function readEvents(limit = 200) {
   return events.slice(0, limit);
 }
 
-async function getObjectEvents(dn, limit = 200) {
+// Scans the whole log (not only the most recent entries), so older history
+// of an object is not crowded out by unrelated events.
+async function getObjectEvents(dn, limit = 200, { excludeActions = [] } = {}) {
   const normalized = safeString(dn).toLowerCase();
-  if (!normalized) return [];
-  const events = await readEvents(limit * 5);
-  return events
-    .filter((event) => {
-      const scopeDn = safeString(event.scopeDn).toLowerCase();
-      const targetDn = safeString(event.targetDn).toLowerCase();
-      return scopeDn === normalized || targetDn === normalized;
-    })
-    .slice(0, limit);
+  if (!normalized) return { rows: [], hidden: 0 };
+  const excluded = new Set(excludeActions);
+  const events = (await readEvents(Infinity)).filter((event) => {
+    const scopeDn = safeString(event.scopeDn).toLowerCase();
+    const targetDn = safeString(event.targetDn).toLowerCase();
+    return scopeDn === normalized || targetDn === normalized;
+  });
+  const visible = events.filter((event) => !excluded.has(event.action));
+  return { rows: visible.slice(0, limit), hidden: events.length - visible.length, total: visible.length };
 }
 
 async function getRecentLoginEvents(limit = 100) {
