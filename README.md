@@ -100,3 +100,20 @@ dostępu do serwera w środowisku, w którym powstał ten kod). Nazwy klas WMI/O
 uwierzytelniania odpowiadają standardowej, domyślnej konfiguracji AdminService, ale jeśli Twoja
 witryna różni się (np. niestandardowe klasy inwentaryzacji, inny format domeny NTLM), może być
 potrzebna korekta w `src/services/sccm/sccmClient.js`.
+
+### Rozwiązywanie problemów
+
+- **„Couldn't find NTLM in the message type2 coming from the server"** – portal przy błędzie
+  połączenia automatycznie odpytuje serwer SCCM bez logowania, żeby sprawdzić, jakie
+  uwierzytelnianie faktycznie oferuje, i dopisuje to do komunikatu błędu. Najczęstsza przyczyna:
+  w IIS dla AdminService włączone jest tylko „Negotiate" (Kerberos), a nie dostawca „NTLM" w
+  Windows Authentication – ten portal obsługuje wyłącznie NTLM. Włącz dostawcę NTLM w IIS, albo,
+  jeśli NTLM jest w organizacji celowo zablokowany politykami GPO, integracja w obecnej postaci
+  nie zadziała i wymagałaby wsparcia dla Kerberos zamiast NTLM (większa zmiana, do uzgodnienia).
+- **„SCCM AdminService odrzucił uwierzytelnianie (401/403)"** – konto się negocjuje, ale zostaje
+  odrzucone: sprawdź `SCCM_SERVICE_USERNAME`/hasło (czy to na pewno `sAMAccountName`, nie DN) i
+  czy to konto ma uprawnienia do odczytu w SCCM (rola „Read-only Analyst" lub wyższa).
+- **Błąd wskazuje na kod inny niż 401** – prawdopodobnie `SCCM_URL` nie wskazuje bezpośrednio na
+  AdminService (np. trafia na stronę logowania albo przekierowanie) – zweryfikuj URL w
+  przeglądarce: `https://<serwer>/AdminService/wmi/SMS_R_System` powinno poprosić o
+  uwierzytelnienie Windows, a nie zwracać stronę HTML.

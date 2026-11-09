@@ -1,3 +1,6 @@
+const http = require('http');
+const https = require('https');
+const { URL } = require('url');
 const httpntlm = require('httpntlm');
 const env = require('../../config/env');
 const { AppError } = require('../../utils/errors');
@@ -15,6 +18,66 @@ function ntlmRequest(method, options) {
       resolve(res);
     });
   });
+}
+
+// httpntlm sends `Authorization: NTLM <type1>` straight away and expects the
+// server's 401 to answer with `WWW-Authenticate: NTLM <type2>`. When that
+// header is missing or offers a different scheme (most often because IIS
+// only has "Negotiate"/Kerberos enabled, or SCCM_URL isn't actually pointing
+// at AdminService), httpntlm's parser fails with a generic, unhelpful error.
+// This does a plain, unauthenticated request to the same URL to see what the
+// server is really offering, so the error we raise says exactly what to fix.
+function probeAuthSchemes(targetUrl) {
+  return new Promise((resolve) => {
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch {
+      resolve(null);
+      return;
+    }
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: 'GET',
+        rejectUnauthorized: env.sccm.rejectUnauthorized,
+        timeout: 5000
+      },
+      (res) => {
+        res.resume();
+        const header = res.headers['www-authenticate'];
+        resolve({ statusCode: res.statusCode, wwwAuthenticate: header ? [].concat(header) : [] });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(null);
+    });
+    req.end();
+  });
+}
+
+async function diagnoseNtlmFailure(targetUrl) {
+  const probe = await probeAuthSchemes(targetUrl);
+  if (!probe) {
+    return 'Nie udało się nawet połączyć bezpośrednio z serwerem, aby zdiagnozować problem – sprawdź SCCM_URL, sieć/firewall i certyfikat TLS (SCCM_TLS_REJECT_UNAUTHORIZED).';
+  }
+  if (probe.statusCode !== 401) {
+    return `Serwer odpowiedział kodem ${probe.statusCode} zamiast 401 (żądanie uwierzytelnienia) – sprawdź, czy SCCM_URL faktycznie wskazuje na AdminService (np. czy to nie strona logowania/błędu/przekierowania).`;
+  }
+  const schemes = probe.wwwAuthenticate.map((h) => h.split(/\s+/)[0]).filter(Boolean).join(', ');
+  if (!schemes) {
+    return 'Serwer zwrócił 401, ale bez nagłówka WWW-Authenticate – prawdopodobnie uwierzytelnianie Windows jest wyłączone dla tej ścieżki w IIS.';
+  }
+  if (!/ntlm/i.test(schemes)) {
+    return `Serwer oferuje uwierzytelnianie: ${schemes} (bez NTLM). Ten portal obsługuje tylko NTLM. W IIS dla AdminService włącz dostawcę „NTLM” w Windows Authentication – samo „Negotiate”/Kerberos nie wystarczy. Jeśli w Twojej organizacji NTLM jest celowo zablokowany (np. politykami GPO w szpitalu), ta integracja w obecnej postaci nie zadziała i wymaga wsparcia dla Kerberos zamiast NTLM.`;
+  }
+  return `Serwer oferuje NTLM (${schemes}), ale negocjacja mimo to się nie powiodła – sprawdź SCCM_DOMAIN (nazwa NetBIOS vs DNS) oraz poprawność SCCM_SERVICE_USERNAME / hasła konta serwisowego.`;
 }
 
 function resolveCredentials(authContext) {
@@ -52,7 +115,8 @@ async function sccmRequest(authContext, path) {
       rejectUnauthorized: env.sccm.rejectUnauthorized
     });
   } catch (error) {
-    throw new AppError(`Nie udało się połączyć z SCCM AdminService: ${error.message}`, 502);
+    const diagnosis = await diagnoseNtlmFailure(url);
+    throw new AppError(`Nie udało się połączyć z SCCM AdminService: ${error.message}. ${diagnosis}`, 502);
   }
 
   if (res.statusCode === 401 || res.statusCode === 403) {
