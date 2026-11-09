@@ -17,6 +17,7 @@
     "helmet": "^8.0.0",
     "httpntlm": "^1.8.14",
     "jspdf": "^4.2.1",
+    "kerberos": "^7.0.0",
     "ldapts": "^7.1.0",
     "morgan": "^1.10.0"
   }

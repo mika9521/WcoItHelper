@@ -4,12 +4,13 @@ const { URL } = require('url');
 const httpntlm = require('httpntlm');
 const env = require('../../config/env');
 const { AppError } = require('../../utils/errors');
+const kerberosAuth = require('./kerberosAuth');
 
-// NOTE: this client has not been exercised against a real SCCM site (none was
-// reachable in the environment this code was written in). The class/field
-// names below follow the standard, out-of-the-box AdminService schema; if
-// your site customizes hardware inventory classes or the AdminService path,
-// this is the one file to adjust. See README.md "SCCM" section.
+// NOTE: this client has not been exercised against a real SCCM site. The
+// class/field names below follow the standard, out-of-the-box AdminService
+// schema; if your site customizes hardware inventory classes or the
+// AdminService path, this is the one file to adjust. See README.md "SCCM"
+// section, including the troubleshooting notes for both auth modes.
 
 function ntlmRequest(method, options) {
   return new Promise((resolve, reject) => {
@@ -17,6 +18,40 @@ function ntlmRequest(method, options) {
       if (err) return reject(err);
       resolve(res);
     });
+  });
+}
+
+function rawGet(targetUrl, { headers, agent, rejectUnauthorized }) {
+  return new Promise((resolve, reject) => {
+    let parsed;
+    try {
+      parsed = new URL(targetUrl);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.request(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port,
+        path: `${parsed.pathname}${parsed.search}`,
+        method: 'GET',
+        agent,
+        rejectUnauthorized,
+        headers
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({ statusCode: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
   });
 }
 
@@ -75,16 +110,12 @@ async function diagnoseNtlmFailure(targetUrl) {
     return 'Serwer zwrócił 401, ale bez nagłówka WWW-Authenticate – prawdopodobnie uwierzytelnianie Windows jest wyłączone dla tej ścieżki w IIS.';
   }
   if (!/ntlm/i.test(schemes)) {
-    return `Serwer oferuje uwierzytelnianie: ${schemes} (bez NTLM). Ten portal obsługuje tylko NTLM. W IIS dla AdminService włącz dostawcę „NTLM” w Windows Authentication – samo „Negotiate”/Kerberos nie wystarczy. Jeśli w Twojej organizacji NTLM jest celowo zablokowany (np. politykami GPO w szpitalu), ta integracja w obecnej postaci nie zadziała i wymaga wsparcia dla Kerberos zamiast NTLM.`;
+    return `Serwer oferuje uwierzytelnianie: ${schemes} (bez NTLM). SCCM_AUTH_MODE=ntlm obsługuje tylko NTLM. W IIS dla AdminService włącz dostawcę „NTLM” w Windows Authentication, albo przełącz portal na SCCM_AUTH_MODE=kerberos (patrz README).`;
   }
   return `Serwer oferuje NTLM (${schemes}), ale negocjacja mimo to się nie powiodła – sprawdź SCCM_DOMAIN (nazwa NetBIOS vs DNS) oraz poprawność SCCM_SERVICE_USERNAME / hasła konta serwisowego.`;
 }
 
 function resolveCredentials(authContext) {
-  if (!env.sccm.url) {
-    throw new AppError('Integracja SCCM nie jest skonfigurowana (ustaw SCCM_URL w .env)', 501);
-  }
-
   if (env.ad.useLoggedUserBind) {
     const username = authContext?.username;
     const password = authContext?.password;
@@ -100,14 +131,11 @@ function resolveCredentials(authContext) {
   return { username: env.sccm.serviceUsername, password: env.ad.bindPassword, domain: env.sccm.domain };
 }
 
-async function sccmRequest(authContext, path) {
+async function performNtlmRequest(authContext, targetUrl) {
   const creds = resolveCredentials(authContext);
-  const url = `${env.sccm.url}/${path}`;
-
-  let res;
   try {
-    res = await ntlmRequest('get', {
-      url,
+    return await ntlmRequest('get', {
+      url: targetUrl,
       username: creds.username,
       password: creds.password,
       domain: creds.domain,
@@ -115,13 +143,86 @@ async function sccmRequest(authContext, path) {
       rejectUnauthorized: env.sccm.rejectUnauthorized
     });
   } catch (error) {
-    const diagnosis = await diagnoseNtlmFailure(url);
+    const diagnosis = await diagnoseNtlmFailure(targetUrl);
     throw new AppError(`Nie udało się połączyć z SCCM AdminService: ${error.message}. ${diagnosis}`, 502);
+  }
+}
+
+function extractNegotiateChallenge(wwwAuthenticateHeader) {
+  const header = [].concat(wwwAuthenticateHeader || []).find((h) => /^Negotiate\s/i.test(h));
+  return header ? header.replace(/^Negotiate\s+/i, '').trim() : '';
+}
+
+async function performKerberosRequest(authContext, targetUrl) {
+  const creds = resolveCredentials(authContext);
+  if (!env.sccm.spn) {
+    throw new AppError(
+      'Nie udało się wyznaczyć SPN serwera SCCM – ustaw SCCM_SPN w .env (np. "HTTP@sccm01.hospital.local")',
+      501
+    );
+  }
+  if (!env.sccm.kerberosRealm) {
+    throw new AppError('Nie udało się wyznaczyć realm Kerberos – ustaw SCCM_KERBEROS_REALM w .env', 501);
+  }
+  const principal = `${creds.username}@${env.sccm.kerberosRealm}`;
+
+  let negotiation;
+  try {
+    negotiation = await kerberosAuth.startNegotiation({ principal, password: creds.password, spn: env.sccm.spn });
+  } catch (error) {
+    throw error instanceof AppError ? error : new AppError(`Nie udało się uzyskać biletu Kerberos: ${error.message}`, 502);
+  }
+
+  const isHttps = targetUrl.startsWith('https:');
+  const agent = isHttps
+    ? new https.Agent({ keepAlive: true, rejectUnauthorized: env.sccm.rejectUnauthorized })
+    : new http.Agent({ keepAlive: true });
+
+  let res;
+  try {
+    res = await rawGet(targetUrl, {
+      headers: { Accept: 'application/json', Authorization: `Negotiate ${negotiation.token}` },
+      agent,
+      rejectUnauthorized: env.sccm.rejectUnauthorized
+    });
+
+    // Some IIS/HTTP.sys configurations need a second leg even for Kerberos:
+    // the server challenges back with a continuation token, which has to be
+    // fed into the same security context and the result sent on the same
+    // (keep-alive) connection.
+    if (res.statusCode === 401) {
+      const challengeToken = extractNegotiateChallenge(res.headers['www-authenticate']);
+      if (challengeToken) {
+        const nextToken = await kerberosAuth.continueNegotiation(negotiation.client, challengeToken);
+        if (nextToken) {
+          res = await rawGet(targetUrl, {
+            headers: { Accept: 'application/json', Authorization: `Negotiate ${nextToken}` },
+            agent,
+            rejectUnauthorized: env.sccm.rejectUnauthorized
+          });
+        }
+      }
+    }
+  } catch (error) {
+    throw new AppError(`Nie udało się połączyć z SCCM AdminService (Kerberos): ${error.message}`, 502);
+  } finally {
+    agent.destroy();
   }
 
   if (res.statusCode === 401 || res.statusCode === 403) {
     throw new AppError(
-      'SCCM AdminService odrzucił uwierzytelnianie – sprawdź SCCM_SERVICE_USERNAME/SCCM_DOMAIN lub uprawnienia konta',
+      `SCCM AdminService odrzucił uwierzytelnianie Kerberos (${res.statusCode}) – sprawdź SCCM_SPN ("${env.sccm.spn}"), SCCM_KERBEROS_REALM ("${env.sccm.kerberosRealm}") oraz czy konto "${principal}" ma uprawnienia do odczytu w SCCM`,
+      res.statusCode
+    );
+  }
+
+  return res;
+}
+
+function handleSccmResponse(res) {
+  if (res.statusCode === 401 || res.statusCode === 403) {
+    throw new AppError(
+      'SCCM AdminService odrzucił uwierzytelnianie – sprawdź konfigurację konta/SPN/realm w .env',
       res.statusCode
     );
   }
@@ -135,6 +236,19 @@ async function sccmRequest(authContext, path) {
   } catch {
     throw new AppError('Nieprawidłowa odpowiedź SCCM AdminService (oczekiwano JSON)', 502);
   }
+}
+
+async function sccmRequest(authContext, path) {
+  if (!env.sccm.url) {
+    throw new AppError('Integracja SCCM nie jest skonfigurowana (ustaw SCCM_URL w .env)', 501);
+  }
+  const url = `${env.sccm.url}/${path}`;
+
+  const res = env.sccm.authMode === 'kerberos'
+    ? await performKerberosRequest(authContext, url)
+    : await performNtlmRequest(authContext, url);
+
+  return handleSccmResponse(res);
 }
 
 function escapeODataString(value) {

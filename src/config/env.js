@@ -1,4 +1,5 @@
 const dotenv = require('dotenv');
+const { URL } = require('url');
 dotenv.config();
 
 function parseBoolean(value, fallback) {
@@ -34,6 +35,20 @@ function deriveNtlmDomain(baseDn) {
     .join('.');
 }
 
+function deriveSccmHostname(sccmUrl) {
+  if (!sccmUrl) return '';
+  try {
+    return new URL(sccmUrl).hostname;
+  } catch {
+    return '';
+  }
+}
+
+function normalizeSccmAuthMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return mode === 'kerberos' ? 'kerberos' : 'ntlm';
+}
+
 module.exports = {
   port: process.env.PORT || 3000,
   sessionSecret: process.env.SESSION_SECRET || 'change-me',
@@ -65,6 +80,15 @@ module.exports = {
     // since this is meant to be the same account, just in NTLM's username
     // format instead of a DN).
     serviceUsername: process.env.SCCM_SERVICE_USERNAME || '',
-    rejectUnauthorized: parseBoolean(process.env.SCCM_TLS_REJECT_UNAUTHORIZED, true)
+    rejectUnauthorized: parseBoolean(process.env.SCCM_TLS_REJECT_UNAUTHORIZED, true),
+    // 'ntlm' (default) uses the httpntlm library. 'kerberos' is for sites
+    // where IIS only offers Negotiate/Kerberos (NTLM provider disabled) -
+    // requires the `kinit` CLI (krb5-user/krb5-workstation) and the native
+    // `kerberos` module to be installed on this server. See README.
+    authMode: normalizeSccmAuthMode(process.env.SCCM_AUTH_MODE),
+    // Kerberos realm, conventionally the domain in uppercase.
+    kerberosRealm: process.env.SCCM_KERBEROS_REALM || deriveNtlmDomain(process.env.AD_BASE_DN).toUpperCase(),
+    // Service principal name for the SCCM AdminService, e.g. "HTTP@sccm01.hospital.local".
+    spn: process.env.SCCM_SPN || (deriveSccmHostname(process.env.SCCM_URL) ? `HTTP@${deriveSccmHostname(process.env.SCCM_URL)}` : '')
   }
 };
