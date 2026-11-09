@@ -26,6 +26,11 @@
         </button>
       </li>
       <li>
+        <button class="app-nav-link" id="sccm-tab" data-bs-toggle="tab" data-bs-target="#sccm-panel" type="button" role="tab">
+          SCCM
+        </button>
+      </li>
+      <li>
         <button class="app-nav-link" id="reports-tab" data-bs-toggle="tab" data-bs-target="#reports-panel" type="button" role="tab">
           Raporty
         </button>
@@ -130,10 +135,54 @@
                 <th style="width:40px;">Typ</th>
                 <th>Nazwa</th>
                 <th>DN</th>
+                <th style="width:150px;">Komputer</th>
                 <th style="width:230px;">Akcje</th>
               </tr>
               </thead>
               <tbody id="results"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-pane fade" id="sccm-panel" role="tabpanel" aria-labelledby="sccm-tab">
+      <section class="card mb-4">
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-md-9">
+              <input id="sccmSearchInput" class="form-control" placeholder="Szukaj urządzenia w SCCM..." />
+            </div>
+            <div class="col-md-3 d-grid">
+              <button id="sccmSearchBtn" class="btn btn-primary">Szukaj</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card mb-4 d-none" id="sccmDeviceCard">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span id="sccmDeviceTitle">Szczegóły urządzenia</span>
+          <button type="button" class="btn-close" id="sccmDeviceCloseBtn" aria-label="Zamknij"></button>
+        </div>
+        <div class="card-body" id="sccmDeviceBody"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">Wyniki</div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0" id="sccmResultsTable">
+              <thead>
+              <tr>
+                <th>Nazwa</th>
+                <th>System operacyjny</th>
+                <th>Ostatni zalogowany użytkownik</th>
+                <th style="width:100px;">Klient SCCM</th>
+                <th style="width:110px;"></th>
+              </tr>
+              </thead>
+              <tbody id="sccmResults"></tbody>
             </table>
           </div>
         </div>

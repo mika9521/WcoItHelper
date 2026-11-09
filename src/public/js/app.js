@@ -197,16 +197,19 @@ function renderResultItem(item) {
   const lockActionBtn = showUnlock
     ? '<button class="btn btn-sm btn-outline-success action-unlock">Odblokuj</button>'
     : (isLockable ? '<button class="btn btn-sm btn-outline-danger action-toggle">Zablokuj</button>' : '');
+  const sccmActionBtn = type === 'computer' ? '<button class="btn btn-sm btn-outline-secondary action-sccm">Pokaż w SCCM</button>' : '';
 
   tr.innerHTML = `
     <td><button type="button" class="btn btn-link p-0 type-open-btn" title="Szczegóły">${getTypeBadgeHtml(type)}</button></td>
     <td><button type="button" class="btn btn-link p-0 object-link">${name}</button><div class="small text-muted">${getTypeLabel(type)}</div></td>
     <td class="small">${dn || '-'}</td>
+    <td class="small sccm-pc-cell text-muted">${type === 'user' ? '…' : '-'}</td>
     <td>
       <div class="d-flex gap-1 justify-content-end flex-wrap">
         <button class="btn btn-sm btn-outline-primary action-open">Szczegóły</button>
         <button class="btn btn-sm btn-outline-warning action-move">Przenieś</button>
         ${lockActionBtn}
+        ${sccmActionBtn}
       </div>
     </td>
   `;
@@ -217,7 +220,25 @@ function renderResultItem(item) {
   tr.querySelector('.action-move').addEventListener('click', () => openMoveOnly(dn, getDisplayName(item) || dn));
   tr.querySelector('.action-toggle')?.addEventListener('click', () => openSoftDeleteModal(item));
   tr.querySelector('.action-unlock')?.addEventListener('click', () => openUnlockModal(item));
+  tr.querySelector('.action-sccm')?.addEventListener('click', () => openDeviceInSccm(name));
+
+  if (type === 'user' && item.sAMAccountName) {
+    loadSccmPrimaryDeviceForRow(tr.querySelector('.sccm-pc-cell'), item.sAMAccountName);
+  }
+
   return tr;
+}
+
+async function loadSccmPrimaryDeviceForRow(cell, login) {
+  if (!cell) return;
+  try {
+    const result = await api(`/api/sccm/primary-user?login=${encodeURIComponent(login)}`);
+    const devices = result.devices || [];
+    cell.textContent = devices.length ? devices.join(', ') : '-';
+    cell.classList.toggle('text-muted', !devices.length);
+  } catch {
+    cell.textContent = '-';
+  }
 }
 
 async function runSearch() {
@@ -236,7 +257,7 @@ async function runSearch() {
     const data = await api(url);
     results.innerHTML = '';
     data.forEach((row) => results.appendChild(renderResultItem(row)));
-    if (!data.length) results.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-3">Brak wyników</td></tr>';
+    if (!data.length) results.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Brak wyników</td></tr>';
   } catch (error) {
     showToast(error.message, true);
   }
@@ -1652,6 +1673,101 @@ async function renderCategoryQuickApply() {
     wrap.classList.add('d-none');
   }
 }
+
+const sccmSearchBtn = document.getElementById('sccmSearchBtn');
+const sccmSearchInput = document.getElementById('sccmSearchInput');
+const sccmResults = document.getElementById('sccmResults');
+const sccmDeviceCard = document.getElementById('sccmDeviceCard');
+const sccmDeviceBody = document.getElementById('sccmDeviceBody');
+const sccmDeviceTitle = document.getElementById('sccmDeviceTitle');
+
+function formatSccmDate(raw) {
+  if (!raw) return '-';
+  const legacyODataMatch = /^\/Date\((\d+)\)\/$/.exec(raw);
+  if (legacyODataMatch) return new Date(Number(legacyODataMatch[1])).toLocaleString('pl-PL');
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? String(raw) : parsed.toLocaleString('pl-PL');
+}
+
+function sccmDeviceDetailTemplate(device) {
+  const rows = [
+    ['Nazwa', device.name],
+    ['System operacyjny', device.operatingSystem],
+    ['Ostatni zalogowany użytkownik', device.lastLogonUser],
+    ['Domena', device.domain],
+    ['Lokacja AD', device.adSiteName],
+    ['Adresy IP', (device.ipAddresses || []).join(', ')],
+    ['Klient SCCM', device.isClient ? 'Tak' : 'Nie'],
+    ['Ostatnia inwentaryzacja sprzętu', formatSccmDate(device.lastHardwareScan)]
+  ];
+  return `<div class="d-grid gap-2">${rows.map(([label, value]) => `<div class="input-group input-group-sm"><span class="input-group-text">${escapeHtml(label)}</span><input class="form-control" readonly value="${escapeHtml(value || '-')}" /></div>`).join('')}</div>`;
+}
+
+async function openSccmDevice(resourceId, name) {
+  if (!sccmDeviceCard || !sccmDeviceBody) return;
+  try {
+    sccmDeviceCard.classList.remove('d-none');
+    if (sccmDeviceTitle) sccmDeviceTitle.textContent = `Szczegóły: ${name || ''}`;
+    sccmDeviceBody.innerHTML = 'Ładowanie…';
+    const url = resourceId
+      ? `/api/sccm/device?resourceId=${encodeURIComponent(resourceId)}`
+      : `/api/sccm/device?name=${encodeURIComponent(name)}`;
+    const device = await api(url);
+    if (sccmDeviceTitle) sccmDeviceTitle.textContent = `Szczegóły: ${device.name}`;
+    sccmDeviceBody.innerHTML = sccmDeviceDetailTemplate(device);
+    sccmDeviceCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (error) {
+    sccmDeviceBody.innerHTML = `<div class="text-danger small">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function renderSccmResultRow(device) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><button type="button" class="btn btn-link p-0 sccm-device-link">${escapeHtml(device.name)}</button></td>
+    <td class="small">${escapeHtml(device.operatingSystem || '-')}</td>
+    <td class="small">${escapeHtml(device.lastLogonUser || '-')}</td>
+    <td>${device.isClient ? '<span class="badge text-bg-success">Tak</span>' : '<span class="badge text-bg-secondary">Nie</span>'}</td>
+    <td><button type="button" class="btn btn-sm btn-outline-primary sccm-device-open">Szczegóły</button></td>
+  `;
+  const open = () => openSccmDevice(device.resourceId, device.name);
+  tr.querySelector('.sccm-device-link').addEventListener('click', open);
+  tr.querySelector('.sccm-device-open').addEventListener('click', open);
+  return tr;
+}
+
+async function runSccmSearch() {
+  if (!sccmResults) return;
+  try {
+    const q = sccmSearchInput?.value || '';
+    const rows = await api(`/api/sccm/search?q=${encodeURIComponent(q)}`);
+    sccmResults.innerHTML = '';
+    rows.forEach((row) => sccmResults.appendChild(renderSccmResultRow(row)));
+    if (!rows.length) sccmResults.innerHTML = '<tr><td colspan="5" class="text-muted text-center py-3">Brak wyników</td></tr>';
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function openDeviceInSccm(name) {
+  const sccmTabTrigger = document.getElementById('sccm-tab');
+  if (!sccmTabTrigger) return;
+  bootstrap.Tab.getOrCreateInstance(sccmTabTrigger).show();
+  if (sccmSearchInput) sccmSearchInput.value = name;
+  openSccmDevice(null, name);
+}
+
+document.getElementById('sccmDeviceCloseBtn')?.addEventListener('click', () => {
+  sccmDeviceCard?.classList.add('d-none');
+});
+
+sccmSearchBtn?.addEventListener('click', runSccmSearch);
+sccmSearchInput?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    runSccmSearch();
+  }
+});
 
 function escapeHtml(text) {
   return String(text || '')

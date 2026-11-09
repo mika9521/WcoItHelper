@@ -25,6 +25,15 @@ function buildAdUrl(protocol) {
 const protocol = normalizeProtocol(process.env.AD_PROTOCOL);
 const tlsEnabled = parseBoolean(process.env.AD_TLS_ENABLED, protocol === 'ldaps');
 
+function deriveNtlmDomain(baseDn) {
+  if (!baseDn) return '';
+  return baseDn
+    .split(',')
+    .map((part) => part.trim().replace(/^DC=/i, ''))
+    .filter(Boolean)
+    .join('.');
+}
+
 module.exports = {
   port: process.env.PORT || 3000,
   sessionSecret: process.env.SESSION_SECRET || 'change-me',
@@ -43,5 +52,19 @@ module.exports = {
       .map((v) => v.trim().toLowerCase())
       .filter(Boolean),
     rejectUnauthorized: parseBoolean(process.env.AD_TLS_REJECT_UNAUTHORIZED, true)
+  },
+  sccm: {
+    // Base URL of the SCCM AdminService WMI endpoint, e.g.
+    // https://sccm01.hospital.local/AdminService/wmi (no trailing slash needed).
+    url: (process.env.SCCM_URL || '').replace(/\/+$/, ''),
+    // NTLM needs a plain domain + sAMAccountName, not an LDAP DN/UPN, so this
+    // falls back to the domain derived from AD_BASE_DN unless overridden.
+    domain: process.env.SCCM_DOMAIN || deriveNtlmDomain(process.env.AD_BASE_DN),
+    // Only used when AD_USE_LOGGED_USER_BIND=false: the plain sAMAccountName
+    // of the AD_BIND_DN service account (AD_BIND_PASSWORD is reused as-is,
+    // since this is meant to be the same account, just in NTLM's username
+    // format instead of a DN).
+    serviceUsername: process.env.SCCM_SERVICE_USERNAME || '',
+    rejectUnauthorized: parseBoolean(process.env.SCCM_TLS_REJECT_UNAUTHORIZED, true)
   }
 };
