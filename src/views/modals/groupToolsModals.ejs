@@ -6,6 +6,11 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
+        <div class="mb-3 d-none" id="categoryQuickApplyWrap">
+          <div class="small fw-semibold mb-1">Szybkie dodanie z kategorii</div>
+          <div class="d-flex flex-wrap gap-2" id="categoryQuickApplyChips"></div>
+          <hr />
+        </div>
         <div class="input-group mb-3">
           <input id="groupLookupInput" class="form-control" placeholder="Szukaj grupy..." />
         </div>
@@ -75,6 +80,23 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" id="applyCopyGroupsBtn">Zastosuj</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="settingsGroupPickerModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="settingsGroupPickerTitle">Wybierz grupę</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group mb-3">
+          <input id="settingsGroupLookupInput" class="form-control" placeholder="Szukaj grupy..." />
+        </div>
+        <div id="settingsGroupLookupResults" class="list-group"></div>
       </div>
     </div>
   </div>

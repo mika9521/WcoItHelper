@@ -37,6 +37,7 @@ const ouPickerModal = new bootstrap.Modal(document.getElementById('ouPickerModal
 const softDeleteConfirmModal = new bootstrap.Modal(document.getElementById('softDeleteConfirmModal'));
 const softDeleteSuccessModal = new bootstrap.Modal(document.getElementById('softDeleteSuccessModal'));
 const unlockAccountModal = new bootstrap.Modal(document.getElementById('unlockAccountModal'));
+const settingsGroupPickerModal = new bootstrap.Modal(document.getElementById('settingsGroupPickerModal'));
 const applyObjectChangesBtn = document.getElementById('applyObjectChangesBtn');
 
 const state = {
@@ -53,7 +54,9 @@ const state = {
   pendingChanges: null,
   ouTreeCache: new Map(),
   activeReportPage: 'stale-logons',
-  portalActivityPage: 1
+  portalActivityPage: 1,
+  settingsGroupPickerCallback: null,
+  permissionCategories: []
 };
 
 function showToast(message, isError = false) {
@@ -930,6 +933,7 @@ function bindModalActions() {
     state.currentUserDn = document.getElementById('openAddGroupModal').dataset.userdn;
     document.getElementById('groupLookupInput').value = '';
     document.getElementById('groupLookupResults').innerHTML = '';
+    renderCategoryQuickApply();
     groupSearchModal.show();
   });
 
@@ -1463,6 +1467,191 @@ document.getElementById('newGroupForm').addEventListener('submit', async (event)
     showToast(error.message, true);
   }
 });
+
+function openSettingsGroupPicker(title, onPick) {
+  document.getElementById('settingsGroupPickerTitle').textContent = title;
+  document.getElementById('settingsGroupLookupInput').value = '';
+  document.getElementById('settingsGroupLookupResults').innerHTML = '';
+  state.settingsGroupPickerCallback = onPick;
+  settingsGroupPickerModal.show();
+}
+
+document.getElementById('settingsGroupLookupInput')?.addEventListener('input', async (event) => {
+  const q = event.target.value.trim();
+  const box = document.getElementById('settingsGroupLookupResults');
+  if (q.length < 2) {
+    box.innerHTML = '';
+    return;
+  }
+  const rows = await api(`/api/search?q=${encodeURIComponent(q)}&type=group`);
+  box.innerHTML = '';
+  rows.forEach((row) => renderLookupItem(box, row, (item) => {
+    const pickedDn = item.dn || item.distinguishedName;
+    settingsGroupPickerModal.hide();
+    state.settingsGroupPickerCallback?.(pickedDn);
+  }));
+});
+
+function renderDnBadgeList(dns, removeClass) {
+  if (!dns.length) return '<span class="text-muted">Brak grup</span>';
+  return dns.map((dn) => `<div class="member-of-line" data-groupdn="${escapeHtml(dn)}"><span class="badge text-bg-info group-badge" title="${escapeHtml(dn)}">${escapeHtml(dnLabel(dn))}</span><button type="button" class="btn-close ${removeClass} ms-2" aria-label="Usuń" data-groupdn="${escapeHtml(dn)}"></button></div>`).join('');
+}
+
+async function loadSettingsPanel() {
+  try {
+    const settings = await api('/api/settings');
+    state.permissionCategories = settings.permissionCategories || [];
+    renderDefaultGroupsList(settings.defaultNewUserGroups || []);
+    renderPermissionCategories(state.permissionCategories);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+function renderDefaultGroupsList(groups) {
+  const holder = document.getElementById('defaultGroupsList');
+  if (!holder) return;
+  holder.innerHTML = renderDnBadgeList(groups, 'remove-default-group-btn');
+  holder.querySelectorAll('.remove-default-group-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api('/api/settings/default-groups', { method: 'DELETE', body: JSON.stringify({ groupDn: btn.dataset.groupdn }) });
+        await loadSettingsPanel();
+      } catch (error) {
+        showToast(error.message, true);
+      }
+    });
+  });
+}
+
+function renderPermissionCategories(categories) {
+  const holder = document.getElementById('permissionCategoriesList');
+  if (!holder) return;
+  if (!categories.length) {
+    holder.innerHTML = '<div class="text-muted small">Brak zdefiniowanych kategorii.</div>';
+    return;
+  }
+  holder.innerHTML = categories.map((cat) => `
+    <div class="card mb-2">
+      <div class="card-body py-2">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <div class="fw-semibold">${escapeHtml(cat.name)}</div>
+          <button type="button" class="btn-close delete-category-btn" aria-label="Usuń kategorię" data-id="${escapeHtml(cat.id)}"></button>
+        </div>
+        <div class="mb-2 category-group-list" data-id="${escapeHtml(cat.id)}">${renderDnBadgeList(cat.groupDns || [], 'remove-category-group-btn')}</div>
+        <button type="button" class="btn btn-outline-primary btn-sm add-category-group-btn" data-id="${escapeHtml(cat.id)}">Dodaj grupę</button>
+      </div>
+    </div>
+  `).join('');
+
+  holder.querySelectorAll('.delete-category-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!window.confirm('Usunąć tę kategorię uprawnień?')) return;
+      try {
+        await api(`/api/settings/categories/${encodeURIComponent(btn.dataset.id)}`, { method: 'DELETE' });
+        await loadSettingsPanel();
+      } catch (error) {
+        showToast(error.message, true);
+      }
+    });
+  });
+
+  holder.querySelectorAll('.add-category-group-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const categoryId = btn.dataset.id;
+      openSettingsGroupPicker('Dodaj grupę do kategorii', async (groupDn) => {
+        try {
+          await api(`/api/settings/categories/${encodeURIComponent(categoryId)}/groups`, {
+            method: 'POST',
+            body: JSON.stringify({ groupDn })
+          });
+          await loadSettingsPanel();
+        } catch (error) {
+          showToast(error.message, true);
+        }
+      });
+    });
+  });
+
+  holder.querySelectorAll('.remove-category-group-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const categoryId = btn.closest('.category-group-list')?.dataset.id;
+      if (!categoryId) return;
+      try {
+        await api(`/api/settings/categories/${encodeURIComponent(categoryId)}/groups`, {
+          method: 'DELETE',
+          body: JSON.stringify({ groupDn: btn.dataset.groupdn })
+        });
+        await loadSettingsPanel();
+      } catch (error) {
+        showToast(error.message, true);
+      }
+    });
+  });
+}
+
+document.getElementById('openAddDefaultGroupModal')?.addEventListener('click', () => {
+  openSettingsGroupPicker('Dodaj domyślną grupę', async (groupDn) => {
+    try {
+      await api('/api/settings/default-groups', { method: 'POST', body: JSON.stringify({ groupDn }) });
+      await loadSettingsPanel();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  });
+});
+
+document.getElementById('newCategoryForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.getElementById('newCategoryName');
+  try {
+    await api('/api/settings/categories', { method: 'POST', body: JSON.stringify({ name: input.value }) });
+    input.value = '';
+    await loadSettingsPanel();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+});
+
+document.getElementById('settings-tab')?.addEventListener('shown.bs.tab', () => {
+  loadSettingsPanel();
+});
+
+async function renderCategoryQuickApply() {
+  const wrap = document.getElementById('categoryQuickApplyWrap');
+  const chipsHolder = document.getElementById('categoryQuickApplyChips');
+  if (!wrap || !chipsHolder) return;
+  try {
+    const settings = await api('/api/settings');
+    const categories = (settings.permissionCategories || []).filter((cat) => (cat.groupDns || []).length);
+    if (!categories.length) {
+      wrap.classList.add('d-none');
+      return;
+    }
+    wrap.classList.remove('d-none');
+    chipsHolder.innerHTML = categories.map((cat) => `<button type="button" class="btn btn-sm btn-outline-secondary category-quick-apply-chip" data-id="${escapeHtml(cat.id)}">${escapeHtml(cat.name)}</button>`).join('');
+    chipsHolder.querySelectorAll('.category-quick-apply-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const category = categories.find((cat) => cat.id === chip.dataset.id);
+        if (!category) return;
+        category.groupDns.forEach((groupDn) => {
+          state.pendingChanges.addGroups.add(groupDn);
+          state.pendingChanges.removeGroups.delete(groupDn);
+          const list = document.getElementById('memberOfList');
+          if (list && !list.querySelector(`[data-groupdn="${cssEscapeValue(groupDn)}"]`)) {
+            list.querySelector('.text-muted')?.remove();
+            list.insertAdjacentHTML('beforeend', renderPendingMemberLine(groupDn, true));
+          }
+        });
+        bindModalActions();
+        groupSearchModal.hide();
+        showToast(`Dodano grupy z kategorii „${category.name}” do zmian oczekujących`);
+      });
+    });
+  } catch {
+    wrap.classList.add('d-none');
+  }
+}
 
 function escapeHtml(text) {
   return String(text || '')

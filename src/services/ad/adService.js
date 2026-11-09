@@ -4,6 +4,7 @@ const { Change, Attribute } = require('ldapts');
 const { AppError } = require('../../utils/errors');
 const { withUserBind, withAdaptiveBind } = require('./adClient');
 const { normalizeObject } = require('./adMapper');
+const { getDefaultNewUserGroups } = require('../settings/settingsService');
 
 const DEFAULT_ATTRS = [
   'cn', 'displayName', 'sAMAccountName', 'userPrincipalName', 'mail', 'department', 'title',
@@ -229,7 +230,22 @@ async function createUser(payload, authContext = null) {
       await client.modify(dn, toChange('replace', 'accountExpires', ACCOUNT_NEVER_EXPIRES));
     }
 
-    return { dn, login };
+    const defaultGroups = await getDefaultNewUserGroups();
+    const appliedDefaultGroups = [];
+    for (const groupDn of defaultGroups) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await client.modify(groupDn, toChange('add', 'member', dn));
+        appliedDefaultGroups.push(groupDn);
+      } catch (error) {
+        // A missing/renamed default group shouldn't block user creation itself;
+        // the admin still sees the account was created and can fix membership manually.
+        // eslint-disable-next-line no-console
+        console.warn(`Nie udało się dodać nowego konta ${dn} do domyślnej grupy ${groupDn}: ${error.message}`);
+      }
+    }
+
+    return { dn, login, defaultGroupsApplied: appliedDefaultGroups };
   });
 }
 

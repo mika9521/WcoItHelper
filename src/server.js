@@ -7,6 +7,7 @@ const env = require('./config/env');
 const authRoutes = require('./routes/authRoutes');
 const viewRoutes = require('./routes/viewRoutes');
 const adRoutes = require('./routes/adRoutes');
+const settingsRoutes = require('./routes/settingsRoutes');
 const { ensureAuth } = require('./middleware/auth');
 
 const app = express();
@@ -31,6 +32,7 @@ app.use(session({
 app.use(authRoutes);
 app.use(ensureAuth, viewRoutes);
 app.use(ensureAuth, adRoutes);
+app.use(ensureAuth, settingsRoutes);
 
 app.listen(env.port, () => {
   // eslint-disable-next-line no-console

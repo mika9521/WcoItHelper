@@ -30,6 +30,11 @@
           Raporty
         </button>
       </li>
+      <li>
+        <button class="app-nav-link" id="settings-tab" data-bs-toggle="tab" data-bs-target="#settings-panel" type="button" role="tab">
+          Ustawienia
+        </button>
+      </li>
     </ul>
     <div class="app-sidebar-user">
       <div class="app-user-avatar"><%= (user.displayName || '?').trim().charAt(0).toUpperCase() %></div>
@@ -215,6 +220,29 @@
         <div class="card-header">Raport: historia logowań</div>
         <div class="card-body">
           <div id="loginHistoryList" class="small text-muted">Ładowanie…</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="tab-pane fade" id="settings-panel" role="tabpanel" aria-labelledby="settings-tab">
+      <section class="card mb-4">
+        <div class="card-header">Domyślna grupa dla nowych kont</div>
+        <div class="card-body">
+          <div class="small text-muted mb-3">Każde nowo utworzone konto użytkownika zostanie automatycznie dodane do poniższych grup.</div>
+          <div class="mb-2 group-member-list" id="defaultGroupsList">Ładowanie…</div>
+          <button type="button" class="btn btn-outline-primary btn-sm" id="openAddDefaultGroupModal">Dodaj grupę</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">Kategorie uprawnień</div>
+        <div class="card-body">
+          <div class="small text-muted mb-3">Zestawy grup AD (np. wg działu lub stanowiska) do szybkiego zastosowania przy zarządzaniu członkostwem użytkownika w grupach.</div>
+          <form id="newCategoryForm" class="input-group input-group-sm mb-3" style="max-width: 420px;">
+            <input id="newCategoryName" class="form-control" placeholder="Nazwa nowej kategorii (np. Dział IT)" required />
+            <button class="btn btn-primary" type="submit">Dodaj kategorię</button>
+          </form>
+          <div id="permissionCategoriesList"></div>
         </div>
       </section>
     </section>
